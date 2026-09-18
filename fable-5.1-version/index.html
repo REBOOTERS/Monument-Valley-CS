@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Monument Valley — Chapter I (Three.js 复刻)</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #303339; font-family: -apple-system, "PingFang SC", "Helvetica Neue", Arial, sans-serif; }
+  #bg, #gl, #fx { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #bg { z-index: 0; }
+  #gl { z-index: 1; touch-action: none; cursor: default; }
+  #fx { z-index: 2; pointer-events: none; }
+  #hud { position: fixed; z-index: 3; right: 14px; bottom: 14px; display: flex; gap: 8px; }
+  #hud button {
+    background: rgba(255,255,255,0.10); color: #dfeef6; border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 6px; padding: 7px 12px; font-size: 13px; letter-spacing: .5px; cursor: pointer; backdrop-filter: blur(6px);
+  }
+  #hud button:hover { background: rgba(255,255,255,0.18); }
+  #hint { position: fixed; z-index: 3; left: 0; right: 0; top: 18px; text-align: center; color: rgba(230,242,248,0.75);
+    font-size: 13px; letter-spacing: 1px; pointer-events: none; transition: opacity .8s; }
+  #chapter { position: fixed; z-index: 3; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center;
+    color: #e8f4f8; letter-spacing: 6px; font-size: 22px; opacity: 0; pointer-events: none; transition: opacity 1.2s; }
+  #chapter small { display: block; letter-spacing: 3px; font-size: 12px; opacity: .7; margin-top: 10px; }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<canvas id="gl"></canvas>
+<canvas id="fx"></canvas>
+<div id="hint">拖动右侧的转轮，再点击你想让艾达前往的位置</div>
+<div id="chapter">第 一 章<small>迷 途 的 公 主</small></div>
+<div id="hud">
+  <button id="btnDemo">自动演示</button>
+  <button id="btnReset">重置</button>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* ------------------------------------------------------------------
+   世界坐标约定（单位 = 1 个方块边长）
+   相机为真等轴测（从 +x,+y,+z 方向看向原点）：
+   +x 在屏幕上朝右下，+z 朝左下，+y 朝上。
+   所有几何尺寸都根据 demo.mp4 逐像素测量还原。
+------------------------------------------------------------------- */
+
+const X0 = 0.5;                      // 左侧墙体/地板起点
+const REF_H = 1280, PX_PER_UNIT = 30; // 视频 1280px 高时，1 单位竖直高度 = 30px
+const CAM_HALF_H = (REF_H / 2) / (PX_PER_UNIT / 0.816496580927726);
+const CAM_TARGET = new THREE.Vector3(0.775, 2.80, -3.575);  // 使原点落在视频中的 (175,766)
+const ISO_DIR = new THREE.Vector3(1, 1, 1).normalize();
+
+// ------------------------------------------------------------ 渲染器 / 相机
+const glCanvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 0);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+const camState = { target: CAM_TARGET.clone(), panU: 0, panR: 0 }; // 结尾镜头平移量（沿相机 up / right）
+function placeCamera() {
+  const right = new THREE.Vector3(1, 0, -1).normalize();
+  const up = new THREE.Vector3(-1, 2, -1).normalize();
+  const t = CAM_TARGET.clone().addScaledVector(up, camState.panU).addScaledVector(right, camState.panR);
+  camera.position.copy(t).addScaledVector(ISO_DIR, 60);
+  camera.lookAt(t);
+  camera.updateMatrixWorld();
+}
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  camera.top = CAM_HALF_H; camera.bottom = -CAM_HALF_H;
+  camera.left = -CAM_HALF_H * aspect; camera.right = CAM_HALF_H * aspect;
+  camera.updateProjectionMatrix();
+  for (const c of [bgCanvas, fxCanvas]) { c.width = w * dpr; c.height = h * dpr; }
+  placeCamera();
+}
+const dpr = Math.min(window.devicePixelRatio, 2);
+const bgCanvas = document.getElementById('bg'), fxCanvas = document.getElementById('fx');
+const bgCtx = bgCanvas.getContext('2d'), fxCtx = fxCanvas.getContext('2d');
+
+// ------------------------------------------------------------ 平面着色材质（按世界法线选色，旋转时颠倒的面也能正确着色）
+function facetMaterial(top, px, pz, opts = {}) {
+  const dark = opts.dark || new THREE.Color(pz).multiplyScalar(0.8);
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      cTop: { value: new THREE.Color(top) },
+      cX: { value: new THREE.Color(px) },
+      cZ: { value: new THREE.Color(pz) },
+      cDark: { value: new THREE.Color(dark) },
+    },
+    vertexShader: `
+      varying vec3 vN;
+      void main(){ vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      uniform vec3 cTop, cX, cZ, cDark; varying vec3 vN;
+      void main(){
+        vec3 n = normalize(vN);
+        float wy = max(n.y,0.0), wx = max(n.x,0.0), wz = max(n.z,0.0);
+        float wd = max(-n.y,0.0) + max(-n.x,0.0) + max(-n.z,0.0);
+        vec3 c = (cTop*wy + cX*wx + cZ*wz + cDark*wd) / max(wx+wy+wz+wd, 1e-4);
+        gl_FragColor = vec4(c, 1.0);
+        #include <colorspace_fragment>
+      }`,
+  });
+}
+// 调色板（从视频取样）
+const PAL = {
+  stone:  facetMaterial('#cfeef8', '#aedbfc', '#5f96bd'),   // 地板 / 底座
+  beam:   facetMaterial('#c6ebf5', '#aacde0', '#61869c'),   // 固定横梁 / 墙顶
+  wall:   facetMaterial('#c6ebf5', '#82aac6', '#5f8faa'),   // 拱廊立面
+  rotor:  facetMaterial('#c1ecf9', '#84a1be', '#6288a2'),   // 可旋转构件（略深）
+  ledge:  facetMaterial('#ccf5ff', '#9cc0dd', '#94b8d5'),   // 小平台（更亮）
+  stair:  facetMaterial('#d0f4fa', '#b6dcea', '#658699'),   // 楼梯
+  goal:   facetMaterial('#e2fdfe', '#bfe0ea', '#7a9db0'),   // 终点平台
+};
+
+function box(mat, x0, x1, y0, y1, z0, z1) {
+  const g = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0);
+  const m = new THREE.Mesh(g, mat);
+  m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+  return m;
+}
+
+// ------------------------------------------------------------ 固定结构
+const world = new THREE.Group(); scene.add(world);
+
+world.add(box(PAL.stone, X0, 8, 0, 1, 0, 1));           // 底部地板
+world.add(box(PAL.stone, X0, 3, 0, 1, -1, 0));          // 拱廊后方的地台（延伸地板，支撑小平台）
+world.add(box(PAL.stone, 8, 9, 0, 4, 0, 1));            // 右侧底座立柱（旋转臂原本落在它上面）
+world.add(box(PAL.beam, X0, 4, 7, 8, 0, 1));            // 固定横梁（x=4 处与旋转臂接缝）
+world.add(box(PAL.ledge, 2, 3, 1, 2, -2.03, 0));        // 小平台：投影上与旋转后的臂端完全重合（多出 0.03 用于消除接缝处的抗锯齿细线）
+
+// 拱廊立面（薄墙 + 两个拱门，三根立柱）
+{
+  const shape = new THREE.Shape();
+  shape.moveTo(X0, 1); shape.lineTo(X0 + 2, 1); shape.lineTo(X0 + 2, 7); shape.lineTo(X0, 7); shape.closePath();
+  const cols = [[X0, X0 + 0.15], [X0 + 0.925, X0 + 1.075], [X0 + 1.85, X0 + 2]];
+  for (let i = 0; i < 2; i++) {
+    const a = cols[i][1], b = cols[i + 1][0], r = (b - a) / 2, cx = (a + b) / 2, yTop = 6.7;
+    const hole = new THREE.Path();
+    hole.moveTo(a, 1); hole.lineTo(a, yTop - r);
+    hole.absarc(cx, yTop - r, r, Math.PI, 0, true);
+    hole.lineTo(b, 1); hole.closePath();
+    shape.holes.push(hole);
+  }
+  const FACADE_T = 0.12;
+  const g = new THREE.ExtrudeGeometry(shape, { depth: FACADE_T, bevelEnabled: false, curveSegments: 12 });
+  const facade = new THREE.Mesh(g, PAL.wall);
+  facade.position.z = 1 - FACADE_T;
+  world.add(facade);
+}
+
+// 楼梯：一块薄斜板上开 28 级细小台阶（每级 0.125），从横梁顶（y=8, z=0.5）向 -z 爬升到 y=11.5, z=-3。
+// 整体是一个沿 x 方向拉伸的单一多边形，斜板底边落在横梁顶面上（z∈[0.15,0.5]），不与横梁相交。
+const STAIR_X0 = X0, STAIR_X1 = X0 + 1, STAIR_Z0 = 0.5, STEPS = 28, STEP = 0.125, SLAB_T = 0.28;
+const TOP_Y = 8 + STEP * STEPS; // 11.5
+{
+  const sh = new THREE.Shape(); // 坐标 (u=z, v=y)
+  sh.moveTo(STAIR_Z0, 8);
+  for (let k = 1; k <= STEPS; k++) {
+    sh.lineTo(STAIR_Z0 - STEP * (k - 1), 8 + STEP * k);   // 竖板
+    sh.lineTo(STAIR_Z0 - STEP * k, 8 + STEP * k);         // 踏面
+  }
+  const zTop = STAIR_Z0 - STEP * STEPS;                    // -3
+  sh.lineTo(zTop, TOP_Y - SLAB_T);
+  sh.lineTo(STAIR_Z0 - SLAB_T, 8);
+  sh.closePath();
+  const g = new THREE.ExtrudeGeometry(sh, { depth: STAIR_X1 - STAIR_X0, bevelEnabled: false });
+  const stairs = new THREE.Mesh(g, PAL.stair);
+  stairs.rotation.y = -Math.PI / 2;      // shape-X → 世界 z，拉伸方向 → 世界 -x
+  stairs.position.x = STAIR_X1;
+  world.add(stairs);
+}
+// 终点平台（楼梯宽度的小过廊 + 带同心方纹的方形地砖）
+world.add(box(PAL.goal, STAIR_X0, STAIR_X1, TOP_Y - 0.4, TOP_Y, -3.3, -3));
+world.add(box(PAL.goal, X0, 2.5, TOP_Y - 0.4, TOP_Y, -5.05, -3.3));
+const GOAL = new THREE.Vector3((X0 + 2.5) / 2, TOP_Y, (-5.05 - 3.3) / 2);
+{
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#e2fdfe'; g.fillRect(0, 0, 256, 256);
+  g.strokeStyle = '#b0c4c9'; g.lineWidth = 12;
+  for (let i = 0; i < 4; i++) { const s = 226 - i * 52; g.strokeRect(128 - s / 2, 128 - s / 2, s, s); }
+  g.fillStyle = '#b0c4c9'; g.fillRect(118, 118, 20, 20);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  const size = 1.4;
+  const tile = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ map: tex }));
+  tile.rotation.x = -Math.PI / 2; tile.position.set(2.5 - 0.08 - size / 2, TOP_Y + 0.004, -5.05 + 0.08 + size / 2);
+  GOAL.set(tile.position.x, TOP_Y, tile.position.z);
+  world.add(tile);
+}
+
+// ------------------------------------------------------------ 可旋转构件（绕曲柄 x 轴旋转）
+const PIVOT = new THREE.Vector3(0, 7.5, 0.5);
+const rotor = new THREE.Group(); rotor.position.copy(PIVOT); world.add(rotor);
+function addToRotor(mesh) { mesh.position.sub(PIVOT); rotor.add(mesh); return mesh; }
+const armA = addToRotor(box(PAL.rotor, 4, 9, 7, 8, 0, 1));            // 横臂（含顶角块），绕自身轴自转
+const ARM_B_LEN = 3;
+// 竖臂；0.04 间隙保证转动时角部不会切入底座。
+// 其末端面（初始为底面，转到位后朝 +z）单独用一个材质：对齐到位时隐藏——此时小平台的顶面与右侧面在投影上
+// 恰好完全覆盖该区域，形成原作中“接缝只剩色调差”的无缝视错觉，同时避免它遮住站在小平台末端的艾达。
+const armBEndMat = PAL.rotor.clone();
+const armB = addToRotor(box([PAL.rotor, PAL.rotor, PAL.rotor, armBEndMat, PAL.rotor, PAL.rotor], 8, 9, 7 - ARM_B_LEN + 0.04, 7, 0, 1));
+
+// 曲柄（平滑着色）
+const crank = new THREE.Group(); rotor.add(crank);
+const crankMat = new THREE.MeshLambertMaterial({ color: '#5f8fae' });
+const knobMat = new THREE.MeshLambertMaterial({ color: '#7fb5cc' });
+const axleMat = new THREE.MeshLambertMaterial({ color: '#b9dbea' });
+{
+  const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.7, 16), axleMat);
+  axle.rotation.z = Math.PI / 2; axle.position.set(9 + 0.85, 0, 0); crank.add(axle);
+  const hub = new THREE.Mesh(new THREE.SphereGeometry(0.4, 24, 16), crankMat);
+  hub.position.set(10.95, 0, 0); crank.add(hub);
+  const socket = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.26, 20), crankMat);
+  socket.rotation.z = Math.PI / 2; socket.position.set(11.27, 0, 0); crank.add(socket);
+  const hole = new THREE.Mesh(new THREE.CircleGeometry(0.17, 20), new THREE.MeshBasicMaterial({ color: '#2d4a60' }));
+  hole.rotation.y = Math.PI / 2; hole.position.set(11.402, 0, 0); crank.add(hole);
+}
+const spokes = []; // 4 根辐条 + 把手；艾达站在旋转构件上时会缩回（与原作一致，表示锁定）
+for (const dir of [[0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+  const d = new THREE.Vector3(...dir);
+  const grp = new THREE.Group(); grp.position.set(10.95, 0, 0);
+  const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1, 12), axleMat);
+  const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.34, 16), knobMat);
+  // 让圆柱沿 dir 方向
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+  spoke.quaternion.copy(q); knob.quaternion.copy(q);
+  grp.add(spoke, knob); crank.add(grp);
+  spokes.push({ spoke, knob, d });
+}
+function setCrankExtension(ext) { // ext: 0 缩回, 1 展开
+  const len = 0.32 + 0.68 * ext;
+  for (const s of spokes) {
+    s.spoke.scale.y = Math.max(len, 0.01);
+    s.spoke.position.copy(s.d).multiplyScalar(len / 2);
+    s.knob.position.copy(s.d).multiplyScalar(len + 0.17 - 0.05 * (1 - ext));
+  }
+}
+setCrankExtension(1);
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1); sun.position.set(3, 6, 4); scene.add(sun);
+
+// ------------------------------------------------------------ 艾达
+const ida = new THREE.Group(); world.add(ida);
+const idaParts = {};
+{
+  const hair = new THREE.MeshBasicMaterial({ color: '#142d4b' });
+  const dress = new THREE.MeshBasicMaterial({ color: '#f49b75' });
+  const dressDark = new THREE.MeshBasicMaterial({ color: '#e07f58' });
+  const skin = new THREE.MeshBasicMaterial({ color: '#f2c9a8' });
+  const white = new THREE.MeshBasicMaterial({ color: '#f4f8fa' });
+  const legMat = new THREE.MeshBasicMaterial({ color: '#1b2230' });
+
+  const mkLeg = (x) => {
+    const g = new THREE.Group(); g.position.set(x, 0.42, 0);
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.04, 0.42, 8), legMat);
+    leg.position.y = -0.21; g.add(leg);
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.14), white);
+    shoe.position.set(0, -0.42, 0.02); g.add(shoe);
+    return g;
+  };
+  idaParts.legL = mkLeg(-0.07); idaParts.legR = mkLeg(0.07);
+  const body = new THREE.Group(); idaParts.body = body;
+  const skirt = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.3, 0.5, 14), dress);
+  skirt.position.y = 0.62; body.add(skirt);
+  const hem = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.31, 0.05, 14), dressDark);
+  hem.position.y = 0.395; body.add(hem);
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.11, 0.12, 12), dress);
+  torso.position.y = 0.92; body.add(torso);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 0.06, 12), white);
+  collar.position.y = 0.99; body.add(collar);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.06, 8), skin);
+  neck.position.y = 1.03; body.add(neck);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.135, 16, 12), skin);
+  head.position.y = 1.16; body.add(head);
+  const hairCap = new THREE.Mesh(new THREE.SphereGeometry(0.165, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.62), hair);
+  hairCap.position.y = 1.165; body.add(hairCap);
+  const bun = new THREE.Mesh(new THREE.SphereGeometry(0.115, 12, 10), hair);
+  bun.position.set(0, 1.31, -0.07); body.add(bun);
+  const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 8), skin);
+  armL.position.set(-0.15, 0.82, 0); armL.rotation.z = 0.15; body.add(armL);
+  const armR = armL.clone(); armR.position.x = 0.15; armR.rotation.z = -0.15; body.add(armR);
+  ida.add(idaParts.legL, idaParts.legR, body);
+}
+
+// ------------------------------------------------------------ 行走路线（一条链；"seam" 表示投影重合的两点之间的“视错觉”跳接）
+//   A 地板右端 → B 拱廊前地板角 → C 地台尽头 ≡ C' 小平台前缘 → D 小平台尽头 ≡ D' 旋转臂末端
+//   → F 顶角 → G 横梁左端 → 楼梯 → 终点
+const chain = [
+  { p: new THREE.Vector3(7.4, 1, 0.5) },
+  { p: new THREE.Vector3(1.15, 1, 0.5) },
+  { p: new THREE.Vector3(1.15, 1, -1.0), seam: true },
+  { p: new THREE.Vector3(2.15, 2, 0.0) },
+  { p: new THREE.Vector3(2.5, 2, -0.7) },
+  { p: new THREE.Vector3(2.5, 2, -1.7), seam: true, needsRotor: true },
+  { p: new THREE.Vector3(8.5, 8, 3.7) },
+  { p: new THREE.Vector3(8.5, 8, 0.5) },
+  { p: new THREE.Vector3(X0 + 0.5, 8, 0.5) },
+  { p: new THREE.Vector3(X0 + 0.5, 8, STAIR_Z0 + STEP) },   // 起步点：沿台阶前沿连线以 45° 上行
+  { p: new THREE.Vector3(X0 + 0.5, TOP_Y, STAIR_Z0 - STEP * STEPS + STEP) }, // 最后一级前沿
+  { p: new THREE.Vector3(X0 + 0.5, TOP_Y, -3.45) },
+  { p: GOAL.clone() },
+];
+const segLen = [], cum = [0];
+for (let i = 0; i < chain.length - 1; i++) {
+  const L = chain[i].seam ? 0 : chain[i].p.distanceTo(chain[i + 1].p);
+  segLen.push(L); cum.push(cum[i] + L);
+}
+const TOTAL = cum[cum.length - 1];
+const ROTOR_RANGE = [cum[6], cum[8]]; // 在此区间内艾达站在旋转构件上（锁定曲柄）
+function posAt(s) {
+  s = THREE.MathUtils.clamp(s, 0, TOTAL);
+  let i = 0; while (i < segLen.length - 1 && s > cum[i + 1]) i++;
+  // 处于接缝（零长度段）时取后一点
+  while (segLen[i] === 0 && i < segLen.length - 1) i++;
+  const t = segLen[i] > 0 ? (s - cum[i]) / segLen[i] : 0;
+  const p = chain[i].p.clone().lerp(chain[i + 1].p, t);
+  const dir = chain[i + 1].p.clone().sub(chain[i].p); dir.y = 0;
+  return { p, dir: dir.lengthSq() > 1e-6 ? dir.normalize() : null, seg: i };
+}
+
+// ------------------------------------------------------------ 游戏状态
+const state = {
+  theta: 0,                 // rotor.rotation.x；目标状态 -π/2（竖臂转到 +z 方向，与小平台连成一线）
+  snapping: null,
+  dragging: null,
+  s: 0.0, sTarget: 0.0,     // 艾达在链上的位置
+  facing: new THREE.Vector3(-1, 0, 0),
+  walkPhase: 0,
+  crankExt: 1,
+  finished: false, endT: 0,
+  demo: null,
+};
+const connected = () => Math.abs(THREE.MathUtils.euclideanModulo(state.theta + Math.PI / 2 + Math.PI, Math.PI * 2) - Math.PI) < 0.02;
+const idaOnRotor = () => state.s > ROTOR_RANGE[0] - 1e-6 && state.s < ROTOR_RANGE[1] + 1e-6;
+
+function toScreen(v) { // 世界坐标 → CSS 像素
+  const p = v.clone().project(camera);
+  return { x: (p.x + 1) / 2 * window.innerWidth, y: (1 - p.y) / 2 * window.innerHeight };
+}
+function hubScreen() { const v = new THREE.Vector3(10.95, 0, 0); crank.localToWorld(v); return toScreen(v); }
+
+// 点击 → 链上最近的可达点（屏幕空间距离）
+function pickChain(px, py) {
+  let best = null;
+  for (let i = 0; i < segLen.length; i++) {
+    if (segLen[i] === 0) continue;
+    const a = toScreen(chain[i].p), b = toScreen(chain[i + 1].p);
+    const abx = b.x - a.x, aby = b.y - a.y, L2 = abx * abx + aby * aby;
+    let t = L2 > 0 ? ((px - a.x) * abx + (py - a.y) * aby) / L2 : 0; t = THREE.MathUtils.clamp(t, 0, 1);
+    const qx = a.x + abx * t, qy = a.y + aby * t;
+    const d = Math.hypot(px - qx, py - qy);
+    if (!best || d < best.d) best = { d, s: cum[i] + segLen[i] * t, i };
+  }
+  const thresh = 0.045 * window.innerHeight;
+  if (!best || best.d > thresh) return null;
+  return best;
+}
+function reachable(sFrom, sTo) {
+  const lo = Math.min(sFrom, sTo), hi = Math.max(sFrom, sTo);
+  for (let i = 0; i < chain.length; i++) {
+    if (chain[i].needsRotor && cum[i] > lo + 1e-6 && cum[i] < hi - 1e-6 && !connected()) return false;
+  }
+  return true;
+}
+
+// ------------------------------------------------------------ 输入
+let pointerDown = null;
+glCanvas.addEventListener('pointerdown', (e) => {
+  if (state.finished || state.demo) return;
+  const hs = hubScreen();
+  const dHub = Math.hypot(e.clientX - hs.x, e.clientY - hs.y);
+  if (dHub < 0.06 * window.innerHeight && !idaOnRotor()) {
+    state.snapping = null;
+    state.dragging = { a0: Math.atan2(e.clientY - hs.y, e.clientX - hs.x), th0: state.theta, last: state.theta };
+    glCanvas.setPointerCapture(e.pointerId);
+  } else {
+    pointerDown = { x: e.clientX, y: e.clientY };
+  }
+});
+glCanvas.addEventListener('pointermove', (e) => {
+  if (!state.dragging) return;
+  const hs = hubScreen();
+  let a = Math.atan2(e.clientY - hs.y, e.clientX - hs.x);
+  let da = a - state.dragging.a0;
+  da = Math.atan2(Math.sin(da), Math.cos(da));
+  // 处理跨越 ±π：以增量方式累积
+  const prevA = state.dragging.prevA ?? state.dragging.a0;
+  let step = a - prevA; step = Math.atan2(Math.sin(step), Math.cos(step));
+  state.dragging.prevA = a;
+  state.theta -= step;                    // 屏幕上顺时针拖动 → θ 减小（竖臂向 +z 方向摆出）
+  spawnDust();
+});
+function endDrag() {
+  if (!state.dragging) return;
+  state.dragging = null;
+  const target = Math.round(state.theta / (Math.PI / 2)) * (Math.PI / 2);
+  state.snapping = { from: state.theta, to: target, t: 0 };
+}
+glCanvas.addEventListener('pointerup', (e) => {
+  if (state.dragging) { endDrag(); return; }
+  if (pointerDown && Math.hypot(e.clientX - pointerDown.x, e.clientY - pointerDown.y) < 12 && !state.finished && !state.demo) {
+    const hit = pickChain(e.clientX, e.clientY);
+    if (hit && reachable(state.s, hit.s)) { state.sTarget = hit.s; ripple(e.clientX, e.clientY, true); }
+    else ripple(e.clientX, e.clientY, false);
+  }
+  pointerDown = null;
+});
+glCanvas.addEventListener('pointercancel', endDrag);
+
+// ------------------------------------------------------------ 特效：点击波纹 / 灰尘粒子 / 背景 / 极光
+const ripples = [];
+function ripple(x, y, ok) { ripples.push({ x, y, t: 0, ok }); }
+const dust = [];
+function spawnDust() {
+  if (dust.length > 60 || Math.random() < 0.6) return;
+  // 在竖臂末端附近产生
+  const end = new THREE.Vector3(8.5, 7 - ARM_B_LEN, 0.5).sub(PIVOT);
+  const w = end.clone(); rotor.localToWorld(w);
+  const sp = toScreen(w);
+  dust.push({ x: sp.x + (Math.random() - .5) * 30, y: sp.y + (Math.random() - .5) * 30, r: 2 + Math.random() * 6, vx: (Math.random() - .5) * 20, vy: -10 - Math.random() * 20, t: 0, life: 0.8 + Math.random() * 0.6 });
+}
+const stars = Array.from({ length: 140 }, () => ({ x: Math.random(), y: Math.random(), r: 0.6 + Math.random() * 1.4, a: 0.25 + Math.random() * 0.6, v: 0.004 + Math.random() * 0.01 }));
+
+function drawBackground(dt, t) {
+  const w = bgCanvas.width, h = bgCanvas.height;
+  const g = bgCtx;
+  g.clearRect(0, 0, w, h);
+  // 天空渐变锚定在世界上：镜头上移时整体随之下滚，并轻微变暗（按视频逐帧取色）
+  const S = h / REF_H;                                   // 画布像素 / 视频像素
+  const panPx = panScreenPx() * S;                       // 镜头上移量（画布像素）
+  const dark = state.finished ? Math.min(0.3, state.endT * 0.06) : 0;
+  const grad = g.createLinearGradient(0, panPx - h * 1.2, 0, panPx + h);
+  const stops = [[0, '#352e3c'], [0.42, '#352e3c'], [0.5, '#2e2f38'], [0.545, '#303339'], [0.77, '#55666e'], [1, '#7a97aa']];
+  for (const [o, c] of stops) grad.addColorStop(o, lerpColor(c, '#1c2230', dark));
+  g.fillStyle = grad; g.fillRect(0, 0, w, h);
+  // 结构下方的柔光
+  const gy = h * 0.72 + panPx;
+  const rg = g.createRadialGradient(w * 0.42, gy, 0, w * 0.42, gy, h * 0.42);
+  rg.addColorStop(0, `rgba(190,215,230,${0.22 * (1 - dark)})`); rg.addColorStop(1, 'rgba(190,215,230,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, w, h);
+  // 缓缓飘落的星点（随世界一起滚动）
+  g.fillStyle = '#ffffff';
+  for (const s of stars) {
+    s.y += s.v * dt; if (s.y > 1.02) { s.y = -0.02; s.x = Math.random(); }
+    g.globalAlpha = s.a * (0.7 + 0.3 * Math.sin(t * 2 + s.x * 20)) * (1 - dark * 1.5);
+    const sy = ((s.y * h + panPx) % (h * 1.04) + h * 1.04) % (h * 1.04) - h * 0.02;
+    g.beginPath(); g.arc(s.x * w, sy, s.r * dpr, 0, Math.PI * 2); g.fill();
+  }
+  g.globalAlpha = 1;
+  if (state.finished) drawAurora(g, w, h, t, S);
+}
+// 镜头上移量换算为视频像素（1280 高基准）
+const PX_PER_UP_UNIT = PX_PER_UNIT / 0.816496580927726;
+function panScreenPx() { return camState.panU * PX_PER_UP_UNIT; }
+function drawAurora(g, w, h, t, S) {
+  const k = THREE.MathUtils.smoothstep(state.endT, 0.6, 2.6);
+  if (k <= 0) return;
+  // 极光幕布比结构下落得更快（约 1.4 倍），顶点从画面上方进入；几何按视频 19.5s 帧（1280 高基准）量取
+  const apexY = (-131 + 1.4 * panScreenPx()) * S;
+  const ax = w * 0.46;
+  g.save(); g.globalAlpha = k;
+  // 倒 V 幕布：两臂向上无限延伸；内部为灰绿渐变，顶点附近泛绿
+  const curtain = (cx, cy, lx, ly, rx, ry, alpha, withBand) => {
+    g.save(); g.globalAlpha = k * alpha;
+    g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + lx * 6, cy + ly * 6); g.lineTo(cx + rx * 6, cy + ry * 6); g.closePath(); g.clip();
+    const body = g.createLinearGradient(0, cy - 420 * S, 0, cy);
+    body.addColorStop(0, 'rgba(55,56,65,1)'); body.addColorStop(0.55, 'rgba(60,66,68,1)'); body.addColorStop(0.85, 'rgba(76,100,80,1)'); body.addColorStop(1, 'rgba(90,120,88,1)');
+    g.fillStyle = body; g.fillRect(0, 0, w, h);
+    if (withBand) {
+      // 波浪形亮绿光带（在幕布内、顶点上方约 265px 处），带缓慢起伏
+      const yc = x => cy - (265 + 30 * (x - cx) / (200 * S)) * S + Math.sin((x / (125 * S)) + t * 0.4) * 22 * S;
+      // 上缘清晰、下缘柔和渐隐
+      const band = (half, color) => {
+        g.beginPath(); g.moveTo(-w, yc(-w) - 14 * S);
+        for (let x = -w; x <= w * 2; x += 8 * dpr) g.lineTo(x, yc(x) - 14 * S);
+        for (let x = w * 2; x >= -w; x -= 8 * dpr) g.lineTo(x, yc(x) + half);
+        g.closePath(); g.fillStyle = color; g.fill();
+      };
+      band(70 * S, 'rgba(57,116,99,0.18)'); band(45 * S, 'rgba(57,116,99,0.3)'); band(22 * S, 'rgba(60,122,104,0.75)');
+      g.shadowColor = 'rgba(70,140,115,0.6)'; g.shadowBlur = 14 * S; band(12 * S, 'rgba(64,128,108,0.5)'); g.shadowBlur = 0;
+    }
+    g.restore();
+  };
+  curtain(ax - 250 * S, apexY - 40 * S, -60 * S, -280 * S, 130 * S, -300 * S, 0.55, true); // 左侧被遮住的第二道幕
+  curtain(ax, apexY, -215 * S, -280 * S, 185 * S, -305 * S, 1, true);
+  // 细长的白色光柱
+  const ly = THREE.MathUtils.smoothstep(state.endT, 2.6, 4.2);
+  g.strokeStyle = `rgba(240,248,250,${0.9 * ly})`; g.lineWidth = 2.2 * S; g.lineCap = 'round';
+  const sx = w * 0.246, sy0 = apexY - 45 * S, sy1 = apexY + 70 * S;
+  g.beginPath(); g.moveTo(sx, sy0 + (sy1 - sy0) * (1 - ly) * 0.5); g.lineTo(sx, sy1 - (sy1 - sy0) * (1 - ly) * 0.5); g.stroke();
+  g.restore();
+}
+function lerpColor(a, b, t) { const ca = new THREE.Color(a), cb = new THREE.Color(b); return '#' + ca.lerp(cb, t).getHexString(); }
+
+function updateFx(dt) {
+  for (let i = ripples.length - 1; i >= 0; i--) { const r = ripples[i]; r.t += dt; if (r.t >= 0.6) ripples.splice(i, 1); }
+  for (let i = dust.length - 1; i >= 0; i--) {
+    const d = dust[i]; d.t += dt; if (d.t > d.life) { dust.splice(i, 1); continue; }
+    d.x += d.vx * dt; d.y += d.vy * dt;
+  }
+}
+function drawFx() {
+  const g = fxCtx, w = fxCanvas.width, h = fxCanvas.height;
+  g.clearRect(0, 0, w, h);
+  for (const r of ripples) {
+    const k = r.t / 0.6;
+    g.strokeStyle = r.ok ? `rgba(255,255,255,${0.8 * (1 - k)})` : `rgba(255,200,200,${0.6 * (1 - k)})`;
+    g.lineWidth = 2 * dpr; g.beginPath(); g.arc(r.x * dpr, r.y * dpr, (8 + 40 * k) * dpr, 0, Math.PI * 2); g.stroke();
+  }
+  for (const d of dust) {
+    const k = d.t / d.life;
+    g.fillStyle = `rgba(255,255,255,${0.75 * (1 - k)})`; g.beginPath(); g.arc(d.x * dpr, d.y * dpr, d.r * (1 + k) * dpr, 0, Math.PI * 2); g.fill();
+  }
+}
+
+// ------------------------------------------------------------ 结尾
+const chapterEl = document.getElementById('chapter'), hintEl = document.getElementById('hint');
+function finish() {
+  state.finished = true; state.endT = 0;
+  hintEl.style.opacity = 0;
+}
+
+// ------------------------------------------------------------ 自动演示（复现视频中的操作序列）
+function startDemo() {
+  reset();
+  hintEl.style.opacity = 0;
+  state.demo = { t: 0 };
+}
+function stepDemo(dt) {
+  const d = state.demo; d.t += dt;
+  // 0.8s 后开始转曲柄：先转过头，再回一点，再对齐 —— 模拟视频中来回拖动
+  const keys = [[1.0, 0], [2.0, -0.5], [3.0, -2.0], [4.2, -1.2], [5.6, -Math.PI / 2]];
+  if (d.t >= keys[0][0] && d.t <= keys[keys.length - 1][0]) {
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (d.t >= keys[i][0] && d.t <= keys[i + 1][0]) {
+        const k = THREE.MathUtils.smoothstep(d.t, keys[i][0], keys[i + 1][0]);
+        const th = THREE.MathUtils.lerp(keys[i][1], keys[i + 1][1], k);
+        if (Math.abs(th - state.theta) > 0.002) spawnDust();
+        state.theta = th;
+      }
+    }
+  }
+  if (d.t > 5.6) state.theta = -Math.PI / 2;
+  if (d.t > 6.3 && !d.tapped) { d.tapped = true; const sp = toScreen(GOAL); ripple(sp.x, sp.y, true); state.sTarget = TOTAL; }
+}
+function reset() {
+  state.theta = 0; state.snapping = null; state.dragging = null;
+  state.s = 0; state.sTarget = 0; state.finished = false; state.endT = 0; state.demo = null; state.crankExt = 1;
+  state.facing.set(-1, 0, 0);
+  camState.panU = 0; camState.panR = 0; placeCamera();
+  chapterEl.style.opacity = 0; hintEl.style.opacity = 1;
+  dust.length = 0; ripples.length = 0;
+}
+document.getElementById('btnDemo').onclick = startDemo;
+document.getElementById('btnReset').onclick = reset;
+
+// ------------------------------------------------------------ 主循环
+const clock = new THREE.Clock();
+let simT = 0;
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  update(dt);
+  render(dt);
+  requestAnimationFrame(frame);
+}
+function render(dt) {
+  drawBackground(dt, simT);
+  renderer.render(scene, camera);
+  drawFx();
+}
+function update(dt) {
+  simT += dt;
+  updateFx(dt);
+  if (state.demo) stepDemo(dt);
+
+  // 曲柄吸附到最近的 90°
+  if (state.snapping) {
+    state.snapping.t += dt / 0.28;
+    const k = THREE.MathUtils.smoothstep(state.snapping.t, 0, 1);
+    state.theta = THREE.MathUtils.lerp(state.snapping.from, state.snapping.to, k);
+    if (state.snapping.t >= 1) { state.theta = state.snapping.to; state.snapping = null; }
+  }
+  state.theta = Math.atan2(Math.sin(state.theta), Math.cos(state.theta));
+  rotor.rotation.x = state.theta;
+  armBEndMat.visible = !connected();
+
+  // 艾达行走
+  const onRotor = idaOnRotor();
+  if (!connected() && state.sTarget !== state.s) {
+    // 若行进途中断开（不可能发生：站在构件上时曲柄被锁），仍做保护
+    if (!reachable(state.s, state.sTarget)) state.sTarget = state.s;
+  }
+  let moving = false;
+  if (Math.abs(state.sTarget - state.s) > 1e-4) {
+    const info = posAt(state.s);
+    const onStairs = info.seg === 9;
+    const speed = onStairs ? 2.65 : 3.4;
+    const dir = Math.sign(state.sTarget - state.s);
+    let ns = state.s + dir * speed * dt;
+    if ((dir > 0 && ns > state.sTarget) || (dir < 0 && ns < state.sTarget)) ns = state.sTarget;
+    state.s = ns; moving = true;
+    state.walkPhase += dt * 11;
+    const after = posAt(state.s);
+    if (after.dir) state.facing.copy(after.dir).multiplyScalar(dir);
+    if (state.s >= TOTAL - 1e-4 && !state.finished) finish();
+  } else {
+    state.walkPhase = THREE.MathUtils.lerp(state.walkPhase, Math.round(state.walkPhase / Math.PI) * Math.PI, 0.2);
+  }
+  const cur = posAt(state.s);
+  ida.position.copy(cur.p);
+  ida.rotation.y = Math.atan2(state.facing.x, state.facing.z);
+  const swing = moving ? Math.sin(state.walkPhase) * 0.55 : Math.sin(state.walkPhase) * 0.55 * 0.2;
+  idaParts.legL.rotation.x = swing; idaParts.legR.rotation.x = -swing;
+  idaParts.body.position.y = moving ? Math.abs(Math.sin(state.walkPhase)) * 0.035 : 0;
+  idaParts.body.rotation.x = moving ? 0.05 : 0;
+
+  // 曲柄缩回/展开（艾达在构件上时锁定）
+  const extTarget = onRotor ? 0 : 1;
+  state.crankExt = THREE.MathUtils.damp(state.crankExt, extTarget, 8, dt);
+  setCrankExtension(state.crankExt);
+  glCanvas.style.cursor = (state.dragging ? 'grabbing' : 'default');
+
+  // 结尾：镜头向上平移，天空变暗，出现极光
+  if (state.finished) {
+    state.endT += dt;
+    // 视频实测：到达后立即起步，约 1s 内加速到 ~106px/s（1280 高基准）匀速上移，并略向左漂移
+    const e = state.endT, ramp = e - 1 + Math.exp(-e);
+    camState.panU = Math.min(2.885 * ramp, 30); camState.panR = Math.min(0.136 * ramp, 1.4); placeCamera();
+    if (state.endT > 6.5) chapterEl.style.opacity = 1;
+  }
+}
+
+window.addEventListener('resize', resize);
+resize();
+reset();
+// 调试/测试入口：#theta=-1.5708&s=12 直接设置状态；#demo 自动演示
+{
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.has('theta')) state.theta = parseFloat(h.get('theta'));
+  if (h.has('s')) { state.s = state.sTarget = parseFloat(h.get('s')); }
+  if (h.has('target')) state.sTarget = parseFloat(h.get('target'));
+  if (h.has('demo')) startDemo();
+  // #ff=秒：以固定步长快进模拟（用于无头截图/确定性测试）
+  if (h.has('ff')) { const n = Math.round(parseFloat(h.get('ff')) / (1 / 60)); for (let i = 0; i < n; i++) update(1 / 60); }
+}
+frame();
+</script>
+</body>
+</html>

@@ -65,6 +65,8 @@ bash tools/extract_frames.sh          # frames/ 39帧 + frames_dense/ 118帧（�
 
 ## 工具链地图（tools/）
 
+部署：见 [DEPLOYMENT.md](DEPLOYMENT.md)（GitHub Pages 双路径方案：`/` 完整版、`/fable/` fable 版）。
+
 | 类别 | 脚本 |
 |---|---|
 | 服务/截图/端到端 | `serve.js` `shot2.js` `play2.js` `diag.js`（Chromium 路径解析见 `chrome.js`，可用 `CHROME_PATH` 覆盖） |
