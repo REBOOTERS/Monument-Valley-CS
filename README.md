@@ -68,6 +68,7 @@ bash tools/extract_frames.sh          # frames/ 39帧 + frames_dense/ 118帧（�
 | 类别 | 脚本 |
 |---|---|
 | 服务/截图/端到端 | `serve.js` `shot2.js` `play2.js` `diag.js`（Chromium 路径解析见 `chrome.js`，可用 `CHROME_PATH` 覆盖） |
+| 行走穿模回归门禁 | `walkcheck.js`（逐边射线断言 + 全程截图，失败退出码 1） |
 | 帧序列/掩膜 | `extract_frames.sh` `dump_static.py` `rotortrace.py` `rotorx.py` `zoomgrid.py` |
 | 轴扫描/拟合（缝安全） | `rotorgrid4.py` `rank_f3v2.py` `verify_final.py` `orbit_table.py` `make_comparisons.py` |
 | 历史存档（含已知 bug，勿直接复用） | `rotorsolve*.py`（v3-v9 迭代）、`rotorgrid/2/3.py`（对跖点假交点）、`finalize.py`（b0d 反号）、`probe*.js`（早期硬编码路径） |

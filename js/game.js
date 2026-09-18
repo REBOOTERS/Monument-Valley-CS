@@ -67,6 +67,14 @@
   const N6 = new THREE.Vector3(1.59, 0.55, 2.30);                 // TL 角墩 / 祭坛梯起点
   const N7 = new THREE.Vector3(1.76, -1.05, 2.62);                // 祭坛
   // N4 = Q=TR（旋转轴过 Q，位置不变）
+  // 拐点（穿模修复）：NA = 悬臂根 N2 沿斜面轴线反延 0.05（在斜面板顶面上，
+  // 且 x0.846 仍在中拱洞 x∈[.728,.866] 内）——前阶梯顶与过拱走线都落在
+  // 悬臂板顶面本身；NB 梁端（梁顶 2.2+0.03）；NC 墩沿内（墩顶 2.27+0.03）：
+  // 梁→墩实为 0.07 高的台阶（f_025 参考 Ida 在 TL 块前踏步上墩），走线拆
+  // 「沿梁 e4a → 上台阶 e4b → 墩面 e4c」三段，避免长直线斜切悬空
+  const NA = new THREE.Vector3(0.846, 0.848, 1.335);
+  const NB = new THREE.Vector3(1.24, 0.03, 2.23);
+  const NC = new THREE.Vector3(1.30, 0.12, 2.30);
 
   /* ---------------- renderer / scene / camera ---------------- */
   const canvas = document.getElementById('game');
@@ -265,11 +273,11 @@
   const foundation = box(1.55, 0.62, 0.58, [foundMat, foundMat, foundMat, foundMat, foundMat, foundMat]);
   foundation.position.set(0.69, 0.61, -0.11);
   level.add(foundation);
-  // 右侧整根静态立柱：自雾中 z-.35 一直立到肘部 z2.37（f_001/f_015 全程不变，
-  // 旋转臂的短臂始终竖直藏在它内部）
-  const pillar = box(0.36, 0.34, 2.72,
+  // 右侧整根静态立柱：自雾中 z-.35 立到与顶梁底齐平（f_001/f_015 全程不变，
+  // 旋转臂的短臂初始竖直藏在它内部；顶端不高过梁顶，保证 Q 处可走）
+  const pillar = box(0.36, 0.34, 2.55,
     [MAT.sideD, MAT.sideL, MAT.sideM, MAT.sideD, MAT.top, MAT.under]);
-  pillar.position.set(0, -0.10, 1.01);
+  pillar.position.set(0, -0.10, 0.925);
   level.add(pillar);
 
   // 拱廊：深处一片薄墙板（y≈.79-.85）开三个哥特尖拱，仅浅进深；
@@ -277,7 +285,9 @@
   // 板顶被更近的顶梁/TL 角墩遮挡（视错觉连接，画面上无顶边）
   (function buildArcade() {
     const WW = 0.66, CX = 0.78, TH = 0.06, Z0 = 0.30, WL = 2.70;
-    const SILL = 1.42 - Z0, SPRING = 2.35 - Z0, APEX = 2.85 - Z0;
+    // 窗台 1.30：走线过中拱时脚高 z1.32-1.37 必须低于窗台（原 1.42 会
+    // 让穿拱段埋进窗台以下的实心墙，walkcheck 实测穿模）
+    const SILL = 1.30 - Z0, SPRING = 2.35 - Z0, APEX = 2.85 - Z0;
     // 三个尖洞（局部 x，0 对应世界 x=.45）：中心/洞宽
     const HOLES = [
       { c: 1.005 - CX + WW / 2, w: 0.139 },
@@ -318,21 +328,27 @@
   // 顶层静态梁：Q(TR) → TL（沿世界 x，y∈[-.27,.07]，z1.9→2.2），转子长臂初始藏于其内
   level.add(beamX(0, L_TOP, -0.10, H, 0.34, T));
 
-  // 悬臂：自拱墙中部棂洞（N2，z1.37）斜向伸到 N3（z2.2）的"不可能斜坡"，
+  // 悬臂：自拱墙中部棂洞（NA→N2 段在墙内、穿过中拱洞口可见）斜伸到 N3
+  // （z2.2）的"不可能斜坡"；根端反延到 NA 使前阶梯顶直接落在板面上。
   // 窄板（屏宽 ~.26 单位）；停靠时长臂顶面与高端 N3 齐平，连成一条步道（f_015）
-  const cant = slabRise(N2, N3, 0.26, 0.30,
+  const cant = slabRise(NA, N3, 0.26, 0.30,
     [MAT.sideM, MAT.sideM, MAT.sideL, MAT.sideM, MAT.top, MAT.sideM]);
   level.add(cant);
 
+  // 拱廊前阶梯（f_001 隐约可见、f_017/f_019 Ida 行走其上）：自底梁右端 N1
+  // 斜上到悬臂板根 NA（顶踏面 z=NA.z，与板面齐平衔接）
+  level.add(stairs(N1, NA, 10, 0.30, 0xa9c9de));
+
   // 通往祭坛的大斜梯
   level.add(stairs(N6, N7, 24, 0.36, 0x7ea3bd));
-  // TL 角墩（压在拱墙上方、遮住墙板顶边；祭坛梯起步平台，顶 z2.5）
+  // TL 角墩（祭坛梯起步平台）：顶面与 N6-0.03=2.27 齐平（可走，与梯级首步
+  // 无高差）；y 中心下移 0.03 与顶梁端搭接无缝。f_015 该处无亮顶面带佐证
   const tlCap = box(0.50, 0.50, 0.30);
-  tlCap.position.set(1.50, 0.35, H + 0.15);
+  tlCap.position.set(1.50, 0.32, 2.12);
   level.add(tlCap);
-  // TR 角墩（Q：转子肘部小冠，遮挡旋转拼缝）
+  // TR 角墩（Q：转子肘部小冠，遮挡旋转拼缝）：顶面与顶梁顶 2.2 齐平可走
   const trCap = box(0.30, 0.30, 0.24);
-  trCap.position.set(0, -0.10, H + 0.12);
+  trCap.position.set(0, -0.10, 2.08);
   level.add(trCap);
 
   // 祭坛（同心方纹）
@@ -612,6 +628,9 @@
     legR.add(rm); legR.position.set(0.024, 0, 0.038);
     tilt.add(legR);
     root.userData = { tilt, legL, legR };
+    // 脚底补偿：网格原点在身体中部（腿底 local z-0.0365），上移 0.02 后
+    // 梁面浮 0.012 / 台阶沉 0.018，均 ≤2.8px（与行走 bob 同量级，不可见）
+    tilt.position.z = 0.02;
     return root;
   }
   const ida = buildIda();
@@ -623,18 +642,21 @@
   const N4 = new THREE.Vector3(0.06, -0.10, H + 0.03);   // 拐角 Q=TR（顶梁/悬臂臂端交接）
   const EDGES = {
     e0: { a: N0, b: N1, type: 'walk' },
-    e1: { a: N1, b: N2, type: 'stairs' },
+    e1: { a: N1, b: NA, type: 'stairs' },  // 拱廊前阶梯（有踏步网格）
+    e1x: { a: NA, b: N2, type: 'walk' },   // 穿中拱缝 onto 悬臂根
     e2: { a: N2, b: N3, type: 'walk' },   // 悬浮悬臂
     e3: { a: N3, b: N4, type: 'walk', gate: 'dock' },   // 停靠长臂
-    e4: { a: N4, b: N6, type: 'walk', gate: 'dock' },   // 顶梁右段 → TL
+    e4a: { a: N4, b: NB, type: 'walk', gate: 'dock' },  // 顶梁右段
+    e4b: { a: NB, b: NC, type: 'walk', gate: 'dock' },  // 梁上续行至梁端
+    e4c: { a: NC, b: N6, type: 'walk', gate: 'dock' },  // 短斜上 TL 墩面
     e5: { a: N6, b: N7, type: 'stairs' },
   };
   const ADJ = {
-    N0: ['e0'], N1: ['e0', 'e1'], N2: ['e1', 'e2'], N3: ['e2', 'e3'],
-    N4: ['e3', 'e4'], N6: ['e4', 'e5'], N7: ['e5'],
+    N0: ['e0'], N1: ['e0', 'e1'], NA: ['e1', 'e1x'], N2: ['e1x', 'e2'], N3: ['e2', 'e3'],
+    N4: ['e3', 'e4a'], NB: ['e4a', 'e4b'], NC: ['e4b', 'e4c'], N6: ['e4c', 'e5'], N7: ['e5'],
   };
-  const VEC = () => ({ N0, N1, N2, N3, N4, N6, N7 });
-  const NODE_KEYS = ['N0', 'N1', 'N2', 'N3', 'N4', 'N6', 'N7'];
+  const VEC = () => ({ N0, N1, NA, N2, N3, N4, NB, NC, N6, N7 });
+  const NODE_KEYS = ['N0', 'N1', 'NA', 'N2', 'N3', 'N4', 'NB', 'NC', 'N6', 'N7'];
 
   let idaState = { edge: 'e0', t: 0 };
   let won = false, docked = false, idaOnArm = false;
@@ -781,7 +803,7 @@
       p.legR.rotation.y *= 0.8;
       p.tilt.rotation.y *= 0.8;
     }
-    idaOnArm = (idaState.edge === 'e3' || idaState.edge === 'e4');
+    idaOnArm = (idaState.edge === 'e3' || idaState.edge === 'e4a' || idaState.edge === 'e4b' || idaState.edge === 'e4c');
   }
 
   /* ---------------- 点击涟漪 ---------------- */
@@ -1060,7 +1082,7 @@
   /* ---------------- 调试 / 自动截图接口 ---------------- */
   window.MV = {
     scene, camera, mech, rotor, ida, renderer, hubWorld: HUB.clone(),
-    N: { N0, N1, N2, N3, N4, N6, N7 },
+    N: { N0, N1, NA, N2, N3, N4, NB, NC, N6, N7 },
     THETA_DOCK, THETA_F3: ROTOR_FIT.t3, ROT_AXIS: ROT_AXIS.clone(), QW: Q_W.clone(),
     setTheta(rad) { setRotorAngle(rad); },
     dock() { setRotorAngle(THETA_DOCK); docked = true; },
@@ -1075,5 +1097,5 @@
     win: winLevel,
     state: () => ({ docked, idaState, moving: !!moves, won }),
   };
-  ['e0', 'e1', 'e2', 'e3', 'e4', 'e5'].forEach(addPick);
+  ['e0', 'e1', 'e1x', 'e2', 'e3', 'e4a', 'e4b', 'e4c', 'e5'].forEach(addPick);
 })();
