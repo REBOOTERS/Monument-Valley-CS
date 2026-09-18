@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Monument Valley — 旋转之章</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+
+    <!-- 左上圆形菜单按钮（装饰，呼应视频） -->
+    <div class="ui-circle" id="btnReset" title="重置关卡">
+      <div class="ui-dot"></div>
+    </div>
+
+    <div class="hint" id="hint">拖动右侧曲柄旋转机关 · 点击路面让小人行走</div>
+
+    <!-- 通关：两块暗紫色幕布自天顶向两侧拉开，倒泪形缝隙中露出墨绿夜空与极光 -->
+    <div id="finale">
+      <div class="fin-dim"></div>
+      <svg class="fin-svg" viewBox="0 0 576 1280" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <!-- 缝隙内的墨绿夜空 -->
+          <linearGradient id="finNight" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#0c191d"/>
+            <stop offset="0.32" stop-color="#14302b"/>
+            <stop offset="0.62" stop-color="#0f1f24"/>
+            <stop offset="1" stop-color="#080d12"/>
+          </linearGradient>
+          <radialGradient id="finAurora" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#4ec894" stop-opacity="0.62"/>
+            <stop offset="0.55" stop-color="#2f9c72" stop-opacity="0.16"/>
+            <stop offset="1" stop-color="#2f9c72" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="finTipGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#a6f9d2" stop-opacity="0.8"/>
+            <stop offset="0.4" stop-color="#43c98f" stop-opacity="0.18"/>
+            <stop offset="1" stop-color="#43c98f" stop-opacity="0"/>
+          </radialGradient>
+          <!-- 幕布：顶端不透明，尖端以下的“尾巴”软化消散 -->
+          <linearGradient id="finCurtainG" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="430">
+            <stop offset="0" stop-color="#241c33" stop-opacity="1"/>
+            <stop offset="0.72" stop-color="#2c2442" stop-opacity="1"/>
+            <stop offset="1" stop-color="#2c2442" stop-opacity="0"/>
+          </linearGradient>
+          <!-- 绿色光边：越靠近尖端越亮 -->
+          <linearGradient id="finRimG" gradientUnits="userSpaceOnUse" x1="0" y1="-24" x2="0" y2="335">
+            <stop offset="0" stop-color="#66e6ac" stop-opacity="0.12"/>
+            <stop offset="0.55" stop-color="#66e6ac" stop-opacity="0.2"/>
+            <stop offset="0.86" stop-color="#7df3bd" stop-opacity="0.6"/>
+            <stop offset="1" stop-color="#bdffe0" stop-opacity="0.95"/>
+          </linearGradient>
+          <filter id="finSoft" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="9"/>
+          </filter>
+          <filter id="finSoft2" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="3.5"/>
+          </filter>
+          <filter id="finGlow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="7"/>
+          </filter>
+          <clipPath id="finOpenClip">
+            <path id="finOpenP" d=""/>
+          </clipPath>
+        </defs>
+
+        <!-- 泪形缝隙：露出的夜空 -->
+        <path id="finReveal" fill="url(#finNight)"/>
+        <g clip-path="url(#finOpenClip)">
+          <ellipse cx="288" cy="100" rx="330" ry="52" fill="url(#finAurora)" filter="url(#finGlow)"/>
+          <ellipse cx="288" cy="160" rx="250" ry="24" fill="url(#finAurora)" opacity="0.35" filter="url(#finGlow)"/>
+          <ellipse id="finTipEl" cx="288" cy="110" rx="58" ry="82" fill="url(#finTipGlow)"/>
+          <circle cx="232" cy="196" r="1.6" fill="#cdeee0" opacity="0.8"/>
+          <circle cx="338" cy="150" r="1.3" fill="#cdeee0" opacity="0.7"/>
+          <circle cx="306" cy="246" r="1.8" fill="#dff7ec" opacity="0.85"/>
+          <circle cx="256" cy="120" r="1.1" fill="#cdeee0" opacity="0.6"/>
+          <circle cx="362" cy="210" r="1.2" fill="#cdeee0" opacity="0.55"/>
+        </g>
+
+        <!-- 幕布：两块，沿泪形边缘在屏幕侧边裁出 -->
+        <path id="finPanelL" fill="url(#finCurtainG)"/>
+        <path id="finPanelR" fill="url(#finCurtainG)"/>
+
+        <!-- 缝隙边缘：紫色绒边 + 内侧绿色光边 -->
+        <path id="finRimPurple" fill="none" stroke="#7a55a3" stroke-width="17" opacity="0.22" filter="url(#finSoft)"/>
+        <path id="finRimGreen" fill="none" stroke="url(#finRimG)" stroke-width="5" filter="url(#finSoft2)"/>
+      </svg>
+      <div class="fin-streak"></div>
+    </div>
+  </div>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
