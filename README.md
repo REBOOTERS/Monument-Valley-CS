@@ -5,12 +5,21 @@ three.js r128（`vendor/`）单页实现，无构建步骤。
 
 ## 本地试玩
 
+两版都用**相对路径本地 three.js**，必须通过 HTTP 打开（不要双击用 `file://`，ES module / importmap 会失败）。
+
 ```bash
-node tools/serve.js          # 起本地服务（默认 8123 端口）
-# 打开 http://localhost:8123
+node tools/serve.js          # 默认 8123；可传端口：node tools/serve.js 9000
 ```
 
+| 版本 | 地址 |
+|---|---|
+| 主版（完整曲柄关） | http://localhost:8123/ |
+| fable 5.1（改名前） | http://localhost:8123/fable-5.1-version/ |
+| fable 5.1（按 DEPLOYMENT 改名后） | http://localhost:8123/fable/ |
+
 拖动右侧曲柄旋转机关 → 长臂摆到悬臂搭接 → 点击路面让 Ida 走上祭坛通关。
+
+> 本地开发与 GitHub Pages 布局一致：同一静态根目录、相对路径资源；差别只是域名与是否已 `git mv` 成 `/fable/`。详见 [DEPLOYMENT.md](DEPLOYMENT.md) §3.1。
 
 ## 环境复刻（新设备 clone 后）
 

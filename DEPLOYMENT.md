@@ -61,18 +61,24 @@ git push origin v1.0 v1.1   # 标签不会随 git push 默认推送
 | 文件位置 | `fable/vendor/three/three.module.js`（three@0.160.0 ESM build） |
 | 禁止 | 再改回 `cdn.jsdelivr.net` / `unpkg.com` 等外链（部署环境可能拉不到） |
 | 本地预览 | 必须用 HTTP 静态服务打开（ES module + importmap 不支持 `file://`） |
+| 推荐方式 | 仓库根执行 `node tools/serve.js`，主版与 fable 共用一个端口 |
 
-本地预览示例：
+本地预览（与 Pages 路径结构对齐）：
 
 ```bash
-# 主版
+# 在仓库根启动（不要 cd 进子目录再起服务，否则相对路径会错）
 node tools/serve.js          # http://localhost:8123/
+# 主版  → http://localhost:8123/
+# fable → http://localhost:8123/fable-5.1-version/   （git mv 后改为 /fable/）
 
-# fable 版（任选一种静态服务）
-cd fable && python3 -m http.server 8081
-# 打开 http://localhost:8081/
+# 改资源后硬刷新即可（serve.js 已 Cache-Control: no-cache）
+# 验证 three 是否本地命中：DevTools → Network，应看到
+#   /vendor/three.min.js
+#   /fable-5.1-version/vendor/three/three.module.js
+# 且 Host 为 localhost，无 cdn.jsdelivr.net
 ```
 
+不推荐再为 fable 单独 `cd fable && python3 -m http.server`：可以跑，但 URL 不再带仓库子路径前缀，和 Pages 不一致，容易误判路径问题。
 ## 4. 需要手动做的一步（无法脚本化）
 
 仓库网页 → **Settings → Pages** → Source 选 **Deploy from a branch**
