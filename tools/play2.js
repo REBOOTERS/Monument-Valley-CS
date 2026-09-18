@@ -2,10 +2,10 @@
 const { chromium } = require('playwright-core');
 const path = require('path');
 const fs = require('fs');
+const { chromeExecutablePath } = require('./chrome');
 const OUT = path.join(__dirname, '..', 'shots', 'play');
 fs.mkdirSync(OUT, { recursive: true });
-const CHROME = process.env.HOME +
-  '/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+const CHROME = chromeExecutablePath();
 
 (async () => {
   const browser = await chromium.launch({

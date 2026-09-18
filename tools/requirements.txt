@@ -1,0 +1,5 @@
+# python 分析工具链依赖（tools/*.py）
+# 安装：python3 -m venv .venv-mac && .venv-mac/bin/pip install -r tools/requirements.txt
+numpy>=2.0
+scipy>=1.11
+pillow>=10.0

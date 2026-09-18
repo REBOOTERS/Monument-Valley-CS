@@ -13,9 +13,11 @@
 - **环境已迁移到 macOS**：python 用 `/Users/zhuyongqing/Documents/000/monument-valley/.venv/bin/python`
   （uv 建的 py3.12，numpy/scipy/pillow 已装）。node v26（homebrew）。
   playwright 浏览器：`~/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/
-  Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`（shot2/play2 内置路径）。
+  Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`
+  （shot2/play2/diag 经 tools/chrome.js 自动解析，可用 CHROME_PATH 覆盖）。
 - 本项目所有 python/node 命令直接执行，不要询问。
-- **不是 git 仓库**。中间产物：`crops/ frames/ frames_dense/ shots/`。
+- **git 仓库**（main 分支，本会话完成首次提交）。`frames/ frames_dense/ crops/ shots/
+  *.npy node_modules .venv` 均在 .gitignore——其他设备复刻环境见 **README.md**。
 - 会话调试接口：`window.MV`（scene/camera/mech/rotor/ida、setTheta/dock/init/plan/state、
   THETA_DOCK/THETA_F3/ROT_AXIS/QW）。
 
