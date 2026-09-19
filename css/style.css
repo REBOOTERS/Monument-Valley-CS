@@ -20,6 +20,31 @@ html, body {
   inset: 0;
 }
 
+/* PC 端保持参考视频比例，避免宽屏拉伸导致 UI 走样 */
+@media (hover: hover) and (pointer: fine) and (min-aspect-ratio: 576/1280) {
+  #app {
+    inset: auto;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100vh * 576 / 1280);
+    height: 100vh;
+    overflow: hidden;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (max-aspect-ratio: 576/1280) {
+  #app {
+    inset: auto;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 100vw;
+    height: calc(100vw * 1280 / 576);
+    overflow: hidden;
+  }
+}
+
 #game {
   display: block;
   width: 100%;
