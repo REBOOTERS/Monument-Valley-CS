@@ -5,6 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Monument Valley — 旋转之章</title>
 <link rel="stylesheet" href="css/style.css">
+<style>
+  /* 右上「自动演示」圆钮：沿用 .ui-circle 基底，仅镜像到右侧并放三角图标 */
+  #btnAuto { left: auto; right: 22px; }
+  .ui-play {
+    width: 0; height: 0;
+    border-style: solid;
+    border-width: 7px 0 7px 12px;
+    border-color: transparent transparent transparent #fff;
+    margin-left: 3px;
+  }
+  #btnAuto.running {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+</style>
 </head>
 <body>
   <div id="app">
@@ -13,6 +28,11 @@
     <!-- 左上圆形菜单按钮（装饰，呼应视频） -->
     <div class="ui-circle" id="btnReset" title="重置关卡">
       <div class="ui-dot"></div>
+    </div>
+
+    <!-- 右上自动演示按钮：自动旋曲柄到停靠位 → Ida 自动行至祭坛终点通关 -->
+    <div class="ui-circle" id="btnAuto" title="自动演示">
+      <div class="ui-play"></div>
     </div>
 
     <div class="hint" id="hint">拖动右侧曲柄旋转机关 · 点击路面让小人行走</div>
@@ -93,5 +113,81 @@
 
   <script src="vendor/three.min.js"></script>
   <script src="js/game.js"></script>
+  <script>
+  /* 自动演示：仅通过 window.MV 调试接口驱动，不改动游戏逻辑。
+     ① 缓动旋转转子 0→THETA_DOCK（与手动拖拽同向，~91.7°）
+     ② dock() 落位后 plan('e5', 1) 经 BFS 排出全程路线，
+        游戏主循环自动行走，Ida 到达祭坛（e5 末端）自动通关。 */
+  (function () {
+    'use strict';
+    var btn = document.getElementById('btnAuto');
+    if (!window.MV || !btn) return;
+
+    var RUN_MS = 90000;          // 行走阶段看门狗
+    var running = false, cancelled = false, raf = 0, timer = 0;
+
+    function easeInOut(k) {
+      return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+    }
+    function finish() {
+      running = false;
+      btn.classList.remove('running');
+    }
+
+    function startDemo() {
+      var MV = window.MV;
+      if (running || MV.state().won) return;
+      running = true; cancelled = false;
+      btn.classList.add('running');
+      document.getElementById('hint').classList.add('hidden');
+
+      // 读取当前转子角（a0=+x → Q0 为单位四元数，rotor 姿态即绕世界 z 的 θ）
+      var q = MV.rotor.quaternion;
+      var th0 = 2 * Math.atan2(q.z, q.w);
+      var th1 = MV.THETA_DOCK;
+      var DUR = 1800, t0 = performance.now();
+      cancelAnimationFrame(raf);
+      (function frame(now) {
+        if (cancelled) return;
+        var k = Math.min((now - t0) / DUR, 1);
+        MV.setTheta(th0 + (th1 - th0) * easeInOut(k));
+        if (k < 1) raf = requestAnimationFrame(frame);
+        else onRotorDone();
+      })(t0);
+    }
+
+    function onRotorDone() {
+      var MV = window.MV;
+      if (cancelled) return;
+      MV.dock();                  // 保证停靠标志就位、gated 边开放
+      timer = setTimeout(function () {
+        if (cancelled) return;
+        MV.dock();
+        if (!MV.plan('e5', 1)) { finish(); return; }   // 路线规划失败则复位按钮
+        var tEnd = Date.now() + RUN_MS;
+        timer = setInterval(function () {
+          if (cancelled) { clearInterval(timer); return; }
+          if (MV.state().won || Date.now() > tEnd) {
+            clearInterval(timer);
+            finish();
+          }
+        }, 300);
+      }, 150);                   // 等主循环 updateMech 消化停靠状态
+    }
+
+    btn.addEventListener('click', startDemo);
+
+    // 旋转阶段用户手动点按画布接管 → 放弃自动演示（已在行走中则仅停止轮询，
+    // 游戏自身的点按改道照常生效）
+    document.getElementById('game').addEventListener('pointerdown', function () {
+      if (!running) return;
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+      clearInterval(timer);
+      finish();
+    }, true);
+  })();
+  </script>
 </body>
 </html>
