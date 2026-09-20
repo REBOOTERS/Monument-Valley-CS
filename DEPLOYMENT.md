@@ -1,11 +1,12 @@
-# GitHub Pages 部署方案（双版本路径）
+# GitHub Pages 部署方案（GitHub Actions 一键启用）
 
-> 本文档为可复用的部署方案。2026-09-18 更新：fable 版 three.js **改为本地加载**（不再依赖 CDN），部署时必须一并发布 `vendor/`。  
-> 执行状态：**未执行**（手动启用步骤见 §4）。
+> 本文档为可复用的部署方案。2026-09-20 更新：改为 **GitHub Actions 自动发布**，
+> 你只需要在仓库 Settings 里把 Pages Source 切到 **GitHub Actions** 一次即可。  
+> fable 版 three.js 已是本地加载（不依赖 CDN），部署时必须一并发布 `vendor/`。
 
 ## 1. 目标架构
 
-仓库根 = 站点根（Deploy from branch：`main` / `(root)`），两个路径对应两个版本：
+仓库根 = 站点构建来源（Deploy by Actions，上传仓库静态文件），两个路径对应两个版本：
 
 | URL | 内容 | three.js |
 |---|---|---|
@@ -23,7 +24,7 @@
 - [x] fable 版 `index.html` 经 importmap 引用**相对路径**
       `./vendor/three/three.module.js`（约 1.2MB，已纳入仓库），
       与主版一样依赖 Pages 原样发布 `vendor/`，**必须**配合 `.nojekyll`
-- [ ] Pages 未启用（当前访问 404）——需执行 §4 手动步骤
+- [ ] Pages Source 需切到 `GitHub Actions`（只做一次）
 - 备注：本机未安装 gh CLI、无 API token，凡涉及仓库设置的操作均需网页手动完成
 
 ## 3. 代码侧步骤（可直接复制）
@@ -31,20 +32,16 @@
 ```bash
 cd /path/to/Monument-Valley-CS
 
-# 1) 目录名即 URL 路径：规整为 /fable/
-#    改名后相对路径 ./vendor/three/three.module.js 仍有效（vendor 跟 index.html 同树）
-git mv fable-5.1-version fable
-
-# 2) 跳过 Jekyll 处理，确保 vendor/（含 three.min.js / three.module.js）原样发布
+# 1) 跳过 Jekyll 处理，确保 vendor/（含 three.min.js / three.module.js）原样发布
 #    不加 .nojekyll 时，Jekyll 可能忽略或改写静态资源，导致 three.js 404、页面白屏
 touch .nojekyll
 
-# 3) 确认本地 three 文件存在（缺一不可）
+# 2) 确认本地 three 文件存在（缺一不可）
 test -f vendor/three.min.js \
   && test -f fable/vendor/three/three.module.js \
   && echo "three.js local OK" || echo "MISSING three.js — abort deploy"
 
-# 4) 提交并推送（含本地标签）
+# 3) 提交并推送（含本地标签）
 git add -A
 git commit -m "部署：fable 改本地 three.js，规整 /fable/ 路径，加 .nojekyll"
 git push origin main
@@ -69,20 +66,23 @@ git push origin v1.0 v1.1   # 标签不会随 git push 默认推送
 # 在仓库根启动（不要 cd 进子目录再起服务，否则相对路径会错）
 node tools/serve.js          # http://localhost:8123/
 # 主版  → http://localhost:8123/
-# fable → http://localhost:8123/fable-5.1-version/   （git mv 后改为 /fable/）
+# fable → http://localhost:8123/fable/
 
 # 改资源后硬刷新即可（serve.js 已 Cache-Control: no-cache）
 # 验证 three 是否本地命中：DevTools → Network，应看到
 #   /vendor/three.min.js
-#   /fable-5.1-version/vendor/three/three.module.js
+#   /fable/vendor/three/three.module.js
 # 且 Host 为 localhost，无 cdn.jsdelivr.net
 ```
 
 不推荐再为 fable 单独 `cd fable && python3 -m http.server`：可以跑，但 URL 不再带仓库子路径前缀，和 Pages 不一致，容易误判路径问题。
 ## 4. 需要手动做的一步（无法脚本化）
 
-仓库网页 → **Settings → Pages** → Source 选 **Deploy from a branch**
-→ Branch 选 `main` / `(root)` → **Save**。约 1 分钟后生效。
+仓库网页 → **Settings → Pages** → Build and deployment → Source 选 **GitHub Actions**
+→ **Save**。
+
+保存后，推送一次 `main`（或在 Actions 页面手动运行 `Deploy GitHub Pages`）即可发布。
+首次构建通常 1-3 分钟生效。
 
 ## 5. 验证
 
@@ -106,8 +106,8 @@ curl -sI https://rebooters.github.io/Monument-Valley-CS/fable/vendor/three/three
 
 - **私有仓库**：GitHub Free 的 Pages 仅支持 public 仓库；若仓库为 private，
   需先转 public（Settings → General → Danger Zone）或升级 Pro
-- **Jekyll / `.nojekyll`**：Pages 默认经 Jekyll 处理；不加 `.nojekyll`，
-  `vendor/` 等目录可能无法按原路径提供，fable 的 ESM three 会 404
+- **Jekyll / `.nojekyll`**：仓库根已加入 `.nojekyll`，确保静态资源（含 `vendor/`）
+  原样发布，避免 fable 的 ESM three 404
 - **尾斜杠**：`/fable`（无斜杠）会被 Pages 自动重定向到 `/fable/`，无需处理
 - **路径深度**：fable 的 importmap 使用 `./vendor/...`（相对当前 HTML），
   部署在 `/Monument-Valley-CS/fable/` 下无需再写仓库名前缀

@@ -14,8 +14,7 @@ node tools/serve.js          # 默认 8123；可传端口：node tools/serve.js 
 | 版本 | 地址 |
 |---|---|
 | 主版（完整曲柄关） | http://localhost:8123/ |
-| fable 5.1（改名前） | http://localhost:8123/fable-5.1-version/ |
-| fable 5.1（按 DEPLOYMENT 改名后） | http://localhost:8123/fable/ |
+| fable 5.1 | http://localhost:8123/fable/ |
 
 拖动右侧曲柄旋转机关 → 长臂摆到悬臂搭接 → 点击路面让 Ida 走上祭坛通关。
 

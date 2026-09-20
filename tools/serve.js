@@ -4,7 +4,6 @@
 // Serves both versions from one origin (mirrors GitHub Pages layout):
 //   http://localhost:8123/                         → 主版
 //   http://localhost:8123/fable/                   → fable（目录改名后）
-//   http://localhost:8123/fable-5.1-version/       → fable（改名前）
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -76,10 +75,7 @@ http.createServer((req, res) => {
 }).listen(PORT, () => {
   console.log('serving ' + ROOT);
   console.log('  main : http://localhost:' + PORT + '/');
-  const fableDir = fs.existsSync(path.join(ROOT, 'fable'))
-    ? 'fable'
-    : (fs.existsSync(path.join(ROOT, 'fable-5.1-version')) ? 'fable-5.1-version' : null);
-  if (fableDir) {
-    console.log('  fable: http://localhost:' + PORT + '/' + fableDir + '/');
+  if (fs.existsSync(path.join(ROOT, 'fable'))) {
+    console.log('  fable: http://localhost:' + PORT + '/fable/');
   }
 });
