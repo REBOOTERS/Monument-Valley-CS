@@ -1,25 +1,74 @@
 /* ============================================================
-   第二章「遗迹」（纪念碑谷2 开篇复刻，demo2.mp4）：
-   白昼场景。方形井坑（内缩于塔楼中）+ 之字悬浮石径 + 四面等高
-   墙体的塔楼，中央柱顶橙色转子（点击 → 行走桥绕竖直轴 90°），
-   Ro（橙裙，1.64× 缩放）与红衣小孩沿链一前一后行走，镜头随爬升上移。
+   第二章「遗迹」—— 纪念碑谷2 开篇复刻（demo2.mp4）
+   实现方法与 fable 第一章完全一致：单一标定锚点 + 单位几何 +
+   平面着色 + 链式行走 + 自包含线性结构。
 
-   相机模型（本章节专属，逐像素实测标定）：
-     仰角 e≈51°（井坑投影高宽比 0.794 → sin e），方位角 45°，
-     K≈28.6px/单位（艾达 30px=1.72 单位），半视高 halfH=22.4。
-     dir=(0.445,0.777,0.445) right=(0.707,0,-0.707)
-     竖直有效系数 cos e≈0.63（垂直高度渲染 = h·K·0.63）。
-   实测尺寸：墙高 12.6、坑边 5.9、桥面高 7.1、门高 3.15、
-     转子中心 11.9、小孩 1.2、跟随距离 ≈2。
+   —— 标定（fable 式：一个锚点闭联全部尺寸）——
+   锚点：Ro 像素高 ≈30px（与第一章艾达一致，同一人物模型 1.05 单位）。
+   井坑投影高宽比 0.794 → 仰角 e=51°（方位角 45°）。
+     ppu = 30 / (1.05·cos51°) = 45.4 px/单位（水平）
+     CAM_HALF_H = 640 / 45.4 = 14.1
+   实测换算：坑口 238px → 3.7 单位；墙外立面带 220px → 墙高 6.9；
+     门洞 92px → 3.2；桥面高（门洞底）3.2；转子中心 5.0。
+   视错觉 clearance：tan51°·(坑心到前角 3.4) = 4.2 > 墙高6.9−桥面3.2=3.7
+     → 桥面恰好越过前墙顶边可见（与视频一致，桥线贴着前墙顶）。
 
-   已核对视频段落：t=0-45（之字径→墙外沿→基座梯→拱门隧道→
-   行走桥（0°）→FR 门洞→墙内换位→FR 外墙角梯→墙顶环廊→
-   FL 端平台→转子两连转）。升塔段/沉塔结局（t=46-111）待续。
+   —— 结构 ——
+   井坑 + 石环 + 之字悬浮石径 + 四面等高墙（前角敞开）+ 墙顶环廊
+   + FL 端平台 + 中央柱（双尖拱托架）+ 橙色转子（点击 → 行走桥
+   绕竖直轴 90°，桥上角色随转载运）+ FR 橙框门洞（桥对接）+ 门洞内
+   换位 → 外墙角梯登顶 → 环廊 → FL 端平台。红衣小孩沿链跟随。
+
+   待续（已测绘，demo2.mp4 t=46-111）：后角塔段升起、总成旋转、
+   登顶、全结构沉坑金色花结局。
    ============================================================ */
 import * as THREE from 'three';
 import { box } from '../core/materials.js';
 
-// 菱形纹贴图（纪念碑谷式表面纹样）：底色 + 亮色菱形（中心与四角，平铺连续）
+/* ---------------- 调色板（视频取样） ---------------- */
+const C = {
+  wallLit: 0x7ea2ff, wallShade: 0x507ae2,
+  wallTop: 0xa5c0f5, crenel: 0x8fadf0,
+  deckTop: 0x33409a, deckDot: 0x8fa4e8, deckSide: 0x4a58b0, deckEdge: 0x9db8f0,
+  column: 0x8ca0e8, columnLit: 0x6f8fe0, columnCap: 0xadbdf2,
+  pitWall: 0x2a2c3c, pitFloor: 0x191920,
+  rim: 0x8aa6f2, rimLit: 0xb6d2ff, path: 0x81a7fc,
+  orange: 0xfdc64b, orangeDeep: 0xf5a623, childRed: 0xd73c32,
+};
+
+/* ---------------- 世界常量（单位见头注释标定） ---------------- */
+const PIT = 3.7;              // 井坑边长（开口 x,z ∈ [0,PIT]）
+const WALL_T = 0.55;          // 墙厚
+const TOP_Y = 6.9;            // 墙顶环廊面
+const WALK_Y = 3.2;           // 桥面 / 门洞底
+const DOOR_H = 3.2;           // 门洞高
+const ROT_Y = 5.0;            // 转子中心
+const COL = { x: 2.39, z: 2.39 };   // 中央柱中心（拱门中点与门洞中点连线的中点）
+const ARM_HALF = 2.17;        // 旋转桥半长
+const WI = PIT, WO = PIT + WALL_T;  // 墙内/外面
+const CORNER = 2.6;           // 前角敞开截断位置：FL/FR 墙止于此，V 形开口让桥面/坑可见
+const S0 = -0.3, S1 = WO;     // 墙跨度
+
+// 旋转桥端点（随角度）：0° = FL 拱门 ↔ FR 门洞；90° = 前角 ↔ 后角
+function walkEnds(turns) {
+  const a = turns * Math.PI / 2;
+  const dx = (Math.cos(a) - Math.sin(a)) * ARM_HALF * Math.SQRT1_2;
+  const dz = (-Math.cos(a) - Math.sin(a)) * ARM_HALF * Math.SQRT1_2;
+  return [{ x: COL.x + dx, z: COL.z + dz }, { x: COL.x - dx, z: COL.z - dz }];
+}
+
+export const META = {
+  id: 'chapter2', title: '第 二 章', subtitle: '遗 迹',
+  hint: '点击中央转子旋转机关 · 点击地面让罗尔行走',
+};
+export const cameraTarget = new THREE.Vector3(COL.x, 4.5, COL.z);   // 取景中心 = 塔身中部（视频构图）
+export const cameraHalfH = 14.1;
+export const cameraDir = new THREE.Vector3(
+  Math.cos(51 * Math.PI / 180) * Math.SQRT1_2, Math.sin(51 * Math.PI / 180),
+  Math.cos(51 * Math.PI / 180) * Math.SQRT1_2).normalize();
+export const skyMode = 'day';
+
+/* ---------------- 菱形纹表面（纪念碑谷式纹样） ---------------- */
 function tileTexture(baseHex, motifHex) {
   const cv = document.createElement('canvas'); cv.width = cv.height = 64;
   const g = cv.getContext('2d');
@@ -32,7 +81,7 @@ function tileTexture(baseHex, motifHex) {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
-// 顶面带菱形纹的盒体（其余面纯色）；tiles = 顶面两方向的纹理重复数
+// 顶面带菱形纹的盒体（tilesX/Z = 顶面重复数）
 function patternedBox(world, baseHex, motifHex, x0, x1, y0, y1, z0, z1, tilesX, tilesZ) {
   const side = new THREE.MeshLambertMaterial({ color: baseHex });
   const topTex = tileTexture(baseHex, motifHex);
@@ -41,50 +90,10 @@ function patternedBox(world, baseHex, motifHex, x0, x1, y0, y1, z0, z1, tilesX, 
   const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0),
     [side, side.clone(), top, side.clone(), side.clone(), side.clone()]);
   m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-  world.add(m); return m;}
-
-/* ---------------- 调色板（视频取样） ---------------- */
-const C = {
-  wallLit: 0x7ea2ff, wallShade: 0x507ae2,
-  wallTop: 0xa5c0f5, crenel: 0x8fadf0,
-  walkTop: 0x33409a, walkTopHi: 0x8fa4e8, walkSide: 0x4a58b0,
-  column: 0x8ca0e8, columnLit: 0x6f8fe0, columnCap: 0xadbdf2,
-  pitWall: 0x2a2c3c, pitFloor: 0x191920,
-  rim: 0x8aa6f2, rimLit: 0xb6d2ff, path: 0x81a7fc,
-  orange: 0xfdc64b, orangeDeep: 0xf5a623, childRed: 0xd73c32,
-};
-
-/* ---------------- 布局常量（单位=本章世界单位） ---------------- */
-const PIT = 5.9;            // 井坑边长（开口 x,z ∈ [0,5.9]，墙内侧面 5.75）
-const WALK_Y = 8.2;         // 旋转桥顶面高度（拱门/门洞地面）
-const TOP_Y = 14.2;         // 墙顶环廊面高度
-const ROT_Y = 11.3;         // 转子中心高度
-const COL = { x: 3.33, z: 3.33 };  // 中央柱中心
-const ARM_HALF = 3.43;      // 旋转桥半长（端点入墙内门洞）
-const DOOR_H = 3.12;        // 门洞高
-const WI = 5.75, WO = 6.3;  // 墙内/外面
-const S0 = -0.3, S1 = 6.3;  // 墙跨度
-const OUT = 6.95;           // 墙外沿步行带外缘
-const IDA_SCALE = 1.62;     // 本章艾达缩放（视频 30px 实测）
-
-// 旋转桥端点（随角度）：0° = FL拱门 ↔ FR门洞；90° = 前角 ↔ 后角
-function walkEnds(turns) {
-  const a = turns * Math.PI / 2;
-  const dx = (Math.cos(a) - Math.sin(a)) * ARM_HALF * Math.SQRT1_2;
-  const dz = (-Math.cos(a) - Math.sin(a)) * ARM_HALF * Math.SQRT1_2;
-  return [{ x: COL.x + dx, z: COL.z + dz }, { x: COL.x - dx, z: COL.z - dz }];
+  world.add(m); return m;
 }
 
-export const META = {
-  id: 'chapter2', title: '第 二 章', subtitle: '遗 迹',
-  hint: '点击中央转子旋转机关 · 点击地面让罗尔行走',
-};
-export const cameraTarget = new THREE.Vector3(2.95, 7.1, 2.95);   // 取景中心 = 桥面高度（视频构图）
-export const cameraHalfH = 22.4;
-export const cameraDir = new THREE.Vector3(0.434, 0.788, 0.434).normalize();
-export const skyMode = 'day';
-
-/* ---------------- 静态几何 ---------------- */
+/* ---------------- 静态结构 ---------------- */
 export function buildWorld(scene) {
   scene.add(new THREE.AmbientLight(0xffffff, 0.92));
   const sun = new THREE.DirectionalLight(0xffffff, 0.55);
@@ -92,107 +101,124 @@ export function buildWorld(scene) {
 
   const world = new THREE.Group(); scene.add(world);
   const mat = c => new THREE.MeshLambertMaterial({ color: c });
-  const lit = [mat(C.wallLit), mat(C.wallLit), mat(C.wallShade), mat(C.wallShade), mat(C.wallTop), mat(C.wallLit)];  // 内侧面同样受光
-const litFR = [mat(C.wallLit), mat(C.wallLit), mat(C.wallShade), mat(C.wallLit), mat(C.wallTop), mat(C.wallShade)];
+  const lit = [mat(C.wallLit), mat(C.wallLit), mat(C.wallTop), mat(C.wallShade), mat(C.wallShade), mat(C.wallLit)];       // FL：+z 外面=深蓝（左墙），-z 内面=浅
+  const litFR = [mat(C.wallLit), mat(C.wallLit), mat(C.wallTop), mat(C.wallShade), mat(C.wallLit), mat(C.wallLit)];       // FR：+x 外面=浅蓝（右墙），-x 内面=浅
 
-  // 基座整板（顶面 y=0）：坑口内缩，四周石环；墙外沿留步行带
-  patternedBox(world, '#8aa6f2', '#c8dcff', -0.35, OUT + 0.35, -0.5, 0, -0.5, OUT + 0.5, 10, 10);
-  // 井坑竖井内壁（背/左两面可见）+ 底
-  world.add(box(mat(C.wallShade), 0, PIT, -1.6, -0.48, -0.08, 0.08));
-  world.add(box(mat(C.pitWall), 0, PIT, -2.7, -1.6, -0.08, 0.08));
-  world.add(box(mat(C.wallShade), -0.08, 0.08, -1.6, -0.48, 0, PIT));
-  world.add(box(mat(C.pitWall), -0.08, 0.08, -2.7, -1.6, 0, PIT));
-  world.add(box(mat(C.pitFloor), 0, PIT, -2.85, -2.7, 0, PIT));
+  // 基座整板（石环，顶面 y=0，菱形纹）
+  patternedBox(world, '#8aa6f2', '#c8dcff', -0.3, WO + 0.35, -0.5, 0, -0.5, WO + 0.35, 9, 9);
+  // 井坑竖井内壁（上段墙体色、下段深）+ 底
+  world.add(box(mat(C.wallShade), 0, PIT, -1.5, -0.48, -0.06, 0.06));
+  world.add(box(mat(C.pitWall), 0, PIT, -2.6, -1.5, -0.06, 0.06));
+  world.add(box(mat(C.wallShade), -0.06, 0.06, -1.5, -0.48, 0, PIT));
+  world.add(box(mat(C.pitWall), -0.06, 0.06, -2.6, -1.5, 0, PIT));
+  world.add(box(mat(C.pitFloor), 0, PIT, -2.75, -2.6, 0, PIT));
 
-  // 之字悬浮石径（从墙外沿前角向画面外右前延伸，远端出画）
+  // 之字悬浮石径（从墙外沿前角延伸出画）
   const stones = [
-    [6.5, 6.5], [7.2, 6.9], [6.9, 7.8], [7.7, 8.2], [7.4, 9.1],
-    [8.2, 9.5], [7.9, 10.4], [8.7, 10.8], [8.4, 11.7], [9.2, 12.1],
-    [8.9, 13.0], [9.7, 13.4], [9.4, 14.3], [10.0, 14.7], [9.7, 15.6],
-    [10.3, 16.0], [10.0, 16.9], [10.6, 17.3], [10.3, 18.2], [10.9, 18.6],
+    [6.5, 6.5], [7.6, 6.8], [7.2, 7.9], [8.3, 8.2], [7.9, 9.3],
+    [9.0, 9.6], [8.6, 10.7], [9.7, 11.0], [9.3, 12.1], [10.4, 12.4],
+    [10.0, 13.5], [11.1, 13.8], [10.7, 14.9], [11.8, 15.2], [11.4, 16.3],
+    [12.5, 16.6], [12.1, 17.7], [13.2, 18.0],
   ];
   for (const [x, z] of stones) {
-    const st = box(mat(C.path), x - 0.6, x + 0.6, -0.16, 0.04, z - 0.38, z + 0.38);
+    const st = patternedBox(world, '#8fb2f5', '#d3e4ff', x - 0.6, x + 0.6, -0.16, 0.04, z - 0.38, z + 0.38, 2, 1);
     st.rotation.y = (x + z) % 2 > 1 ? 0.15 : -0.12;
-    world.add(st);
   }
 
-  // 四面墙（等高 TOP_Y）：FL(z≈6 侧，含高拱门隧道)、FR(x≈6 侧，含橙色门洞)、BL、BR
-  const zA = WI, zB = WO, ax0 = 0.2, ax1 = 1.6;              // FL 拱门隧道 x∈[0.2,1.6]
-  const xA = WI, xB = WO, dz0 = 0.2, dz1 = 1.6;              // FR 门洞隧道 z∈[0.2,1.6]
-  world.add(box(lit, S0, 4.2, 0, TOP_Y - 0.25, zA, zB));
-  world.add(box(lit, ax1, 4.2, 0, TOP_Y - 0.25, zA, zB));
-  world.add(box(lit, ax0, ax1, 7.5, TOP_Y - 0.25, zA, zB));
-  world.add(box(litFR, xA, xB, 0, TOP_Y - 0.25, S0, 4.2));
-  world.add(box(litFR, xA, xB, 0, TOP_Y - 0.25, 4.2, S1));
+  // 四面墙。FL(z∈[WI,WO]，通高拱门隧道 x∈[0.35,1.45])、
+  // FR(x∈[WI,WO]，门洞 z∈[0.35,1.45])——两墙在前角前截断（CORNER，敞开）；
+  // BL / BR 通长。
+  const zA = WI, zB = WO, ax0 = 0.35, ax1 = 1.45;
+  const xA = WI, xB = WO, dz0 = 0.35, dz1 = 1.45;
+  world.add(box(lit, S0, ax0, 0, TOP_Y - 0.25, zA, zB));
+  world.add(box(lit, ax1, CORNER, 0, TOP_Y - 0.25, zA, zB));
+  world.add(box(lit, ax0, ax1, 5.4, TOP_Y - 0.25, zA, zB));            // 拱门上方墙
+  world.add(box(litFR, xA, xB, 0, TOP_Y - 0.25, S0, dz0));
+  world.add(box(litFR, xA, xB, 0, TOP_Y - 0.25, dz1, CORNER));
   world.add(box(litFR, xA, xB, WALK_Y + DOOR_H, TOP_Y - 0.25, dz0, dz1));
   // FR 橙色门框（内侧面）
-  const of = mat(C.orange);
-  world.add(box(of, xA - 0.05, xA, WALK_Y, WALK_Y + DOOR_H + 0.12, dz0 - 0.09, dz0));
-  world.add(box(of, xA - 0.05, xA, WALK_Y, WALK_Y + DOOR_H + 0.12, dz1, dz1 + 0.09));
-  world.add(box(of, xA - 0.05, xA, WALK_Y + DOOR_H - 0.09, WALK_Y + DOOR_H + 0.21, dz0 - 0.09, dz1 + 0.09));
+  world.add(box(mat(C.orange), xA - 0.05, xA, WALK_Y, WALK_Y + DOOR_H + 0.12, dz0 - 0.09, dz0));
+  world.add(box(mat(C.orange), xA - 0.05, xA, WALK_Y, WALK_Y + DOOR_H + 0.12, dz1, dz1 + 0.09));
+  world.add(box(mat(C.orange), xA - 0.05, xA, WALK_Y + DOOR_H - 0.09, WALK_Y + DOOR_H + 0.21, dz0 - 0.09, dz1 + 0.09));
   // BL / BR 墙
   world.add(box(lit, S0, S1, 0, TOP_Y - 0.25, -0.3, 0.25));
   world.add(box(lit, -0.3, 0.25, 0, TOP_Y - 0.25, S0, S1));
 
-  // 墙顶环廊压顶（出檐）+ 外沿垛口
-  const capMat = mat(C.wallTop), crMat = mat(C.crenel);
-  const caps = [
-    [S0 - 0.07, 4.27, zA - 0.07, zB + 0.07],
-    [xA - 0.07, xB + 0.07, S0 - 0.07, 4.27],
-    [S0 - 0.07, S1 + 0.07, -0.37, 0.32],
-    [-0.37, 0.32, S0 - 0.07, S1 + 0.07],
-  ];
-  for (const [x0, x1, z0, z1] of caps)
-    patternedBox(world, '#a5c0f5', '#dbe8ff', x0, x1, TOP_Y - 0.25, TOP_Y, z0, z1, (x1 - x0) / 0.8, (z1 - z0) / 0.8);
-  for (let t = 0; t <= 4.2; t += 0.62) {
-    world.add(box(crMat, t - 0.11, t + 0.11, TOP_Y, TOP_Y + 0.18, zB, zB + 0.18));
-    world.add(box(crMat, xB, xB + 0.18, TOP_Y, TOP_Y + 0.18, t - 0.11, t + 0.11));
-  }
-  // 檐口带（墙顶下方深色收边）
-  for (const [x0, x1, z0, z1, c] of [
-    [S0, 4.27, zA, zB, C.wallShade], [xA, xB, S0, 4.27, C.wallShade],
-    [S0, S1, -0.3, 0.32, C.wallShade], [-0.3, 0.32, S0, S1, C.wallShade],
-  ]) world.add(box(mat(c), x0, x1, TOP_Y - 0.55, TOP_Y - 0.25, z0, z1));
+  // 檐口收边带（墙顶下方深色，四面）
+  for (const [x0, x1, z0, z1] of [
+    [S0, CORNER, zA, zB], [xA, xB, S0, CORNER],
+    [S0, S1, -0.3, 0.25], [-0.3, 0.25, S0, S1],
+  ]) world.add(box(mat(C.wallShade), x0, x1, TOP_Y - 0.5, TOP_Y - 0.25, z0, z1));
 
-  // FL 端平台（墙顶左端向外突出）
-  patternedBox(world, '#a5c0f5', '#dbe8ff', -1.4, 0.32, TOP_Y - 0.25, TOP_Y, zA - 0.07, OUT + 0.2, 2, 2);
-  world.add(box(crMat, -1.4, -1.26, TOP_Y, TOP_Y + 0.18, zA - 0.07, OUT + 0.2));
-  world.add(box(crMat, -1.4, 0.32, TOP_Y, TOP_Y + 0.18, OUT + 0.04, OUT + 0.2));
-
-  // FL 基座梯（拱门隧道内，14 级，井沿 0 → 桥面 8.2；上段在拱门开口可见）
-  for (let i = 0; i < 8; i++) {
-    const y = i * (WALK_Y / 13);
-    world.add(box(mat(C.rimLit), ax0 + 0.05, ax1 - 0.05, y, y + WALK_Y / 13,
-      zB - 0.4 + i * 0.05, zB - 0.4 + i * 0.05 + 0.75));
+  // 墙顶环廊压顶（菱形纹顶面 + 出檐）
+  patternedBox(world, '#a5c0f5', '#dbe8ff', S0 - 0.07, CORNER + 0.07, TOP_Y - 0.25, TOP_Y, zA - 0.07, zB + 0.07, 7, 1);
+  patternedBox(world, '#a5c0f5', '#dbe8ff', xA - 0.07, xB + 0.07, TOP_Y - 0.25, TOP_Y, S0 - 0.07, CORNER + 0.07, 1, 7);
+  patternedBox(world, '#a5c0f5', '#dbe8ff', S0 - 0.07, S1 + 0.07, TOP_Y - 0.25, TOP_Y, -0.37, 0.32, 8, 1);
+  patternedBox(world, '#a5c0f5', '#dbe8ff', -0.37, 0.32, TOP_Y - 0.25, TOP_Y, S0 - 0.07, S1 + 0.07, 1, 8);
+  // 垛口（外沿）
+  for (let t = 0; t <= CORNER; t += 0.62) {
+    world.add(box(mat(C.crenel), t - 0.11, t + 0.11, TOP_Y, TOP_Y + 0.18, zB, zB + 0.18));
+    world.add(box(mat(C.crenel), xB, xB + 0.18, TOP_Y, TOP_Y + 0.18, t - 0.11, t + 0.11));
   }
-  // FR 外墙角楼梯（贴前角上行，14 级）
-  for (let i = 0; i < 14; i++) {
-    const y = WALK_Y + i * (TOP_Y - 0.25 - WALK_Y) / 7;
-    world.add(box(mat(C.columnCap), xB, xB + 0.36, y - 0.07, y + (TOP_Y - 0.25 - WALK_Y) / 13,
-      zB - i * 0.06 - 0.46, zB - i * 0.06 + 0.46));
+  // FL 端平台（墙顶左端向外突出，终点）
+  const platZ = WO + 0.85;
+  patternedBox(world, '#a5c0f5', '#dbe8ff', -1.4, 0.32, TOP_Y - 0.25, TOP_Y, zA - 0.07, platZ, 2, 2);
+  world.add(box(mat(C.crenel), -1.4, -1.26, TOP_Y, TOP_Y + 0.18, zA - 0.07, platZ));
+  world.add(box(mat(C.crenel), -1.4, 0.32, TOP_Y, TOP_Y + 0.18, platZ - 0.15, platZ));
+
+  // FL 基座梯（拱门隧道内 10 级：井沿 0 → 桥面 WALK_Y，穿墙上行）
+  for (let i = 0; i < 10; i++) {
+    const y = i * (WALK_Y / 10);
+    world.add(box(mat(C.rimLit), ax0 + 0.04, ax1 - 0.04, y, y + WALK_Y / 10,
+      WO - 0.15 + (9 - i) * 0.05 - 0.35, WO - 0.15 + (9 - i) * 0.05 + 0.4));
+  }
+  // FR 外墙角楼梯（贴前角上行 10 级：门洞底 → 墙顶）
+  for (let i = 0; i < 10; i++) {
+    const y = WALK_Y + i * (TOP_Y - WALK_Y) / 9;
+    world.add(box(mat(C.columnCap), xB, xB + 0.36, y - 0.05, y + (TOP_Y - WALK_Y) / 9,
+      4.3 - i * 0.17 - 0.44, 4.3 - i * 0.17 + 0.44));
   }
 
-  // 中央柱：井底升出，柱础 + 柱身 + 拱形托架 + 顶帽
-  world.add(box(mat(C.columnLit), COL.x - 0.7, COL.x + 0.7, -2.85, WALK_Y - 0.18, COL.z - 0.7, COL.z + 0.7));
-  world.add(box(mat(C.columnCap), COL.x - 0.92, COL.x + 0.92, WALK_Y - 0.18, WALK_Y + 0.28, COL.z - 0.92, COL.z + 0.92));
-  world.add(box(mat(C.column), COL.x - 0.42, COL.x + 0.42, WALK_Y + 0.28, ROT_Y - 0.75, COL.z - 0.42, COL.z + 0.42));
-  for (const dx of [-0.45, 0.45]) {
-    world.add(box(mat(C.columnLit), COL.x + dx - 0.21, COL.x + dx + 0.21, 0.3, 1.8, COL.z - 0.45, COL.z - 0.4));
+  // 中央柱：井底升出，柱础 + 双尖拱托架 + 柱身 + 顶帽
+  world.add(box(mat(C.columnLit), COL.x - 0.42, COL.x + 0.42, -2.6, WALK_Y - 0.12, COL.z - 0.42, COL.z + 0.42));
+  {
+    // 双尖拱托架（柱顶与桥面之间）
+    const sh = new THREE.Shape();
+    sh.moveTo(-0.78, 0); sh.lineTo(0.78, 0); sh.lineTo(0.78, 1.35); sh.lineTo(-0.78, 1.35); sh.closePath();
+    for (const cx of [-0.39, 0.39]) {
+      const h = new THREE.Path();
+      const w = 0.27, top = 1.1;
+      h.moveTo(cx - w, 0); h.lineTo(cx - w, top - w);
+      h.quadraticCurveTo(cx, top + 0.14, cx + w, top - w);
+      h.lineTo(cx + w, 0); h.closePath();
+      sh.holes.push(h);
+    }
+    const g = new THREE.ExtrudeGeometry(sh, { depth: 0.42, bevelEnabled: false });
+    g.translate(0, 0, -0.21);
+    const trestle = new THREE.Mesh(g, mat(C.deckSide));
+    trestle.position.set(COL.x, WALK_Y - 1.35, COL.z);
+    world.add(trestle);
   }
+  world.add(box(mat(C.column), COL.x - 0.32, COL.x + 0.32, WALK_Y, ROT_Y - 0.5, COL.z - 0.32, COL.z + 0.32));
+  world.add(box(mat(C.columnCap), COL.x - 0.42, COL.x + 0.42, ROT_Y - 0.5, ROT_Y, COL.z - 0.42, COL.z + 0.42));
+
+  // 橙色控制台（右墙外沿基座，视频 t=8 右侧）
+  world.add(box(mat(C.columnCap), WO + 0.1, WO + 0.85, -0.28, 0.3, 2.6, 3.35));
+  world.add(box(mat(C.orange), WO + 0.22, WO + 0.73, 0.3, 0.42, 2.72, 3.23));
+  world.add(box(mat(C.orangeDeep), WO + 0.32, WO + 0.63, 0.42, 0.48, 2.82, 3.13));
 
   // 橙色碎屑（石环装饰，确定性伪随机）
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 36; i++) {
     const side = i % 4;
-    const t = 0.3 + rnd() * (PIT - 0.2);
-    const s = 0.09 + rnd() * 0.16;
+    const t = 0.2 + rnd() * (PIT + 0.3);
+    const s = 0.08 + rnd() * 0.15;
     let x, z;
-    if (side === 0) { x = t; z = WI + 0.12 + rnd() * 0.5; }
-    else if (side === 1) { x = t; z = -0.35 + rnd() * 0.5; }
-    else if (side === 2) { x = -0.35 + rnd() * 0.5; z = t; }
-    else { x = WI + 0.12 + rnd() * 0.5; z = t; }
+    if (side === 0) { x = t; z = WI + 0.15 + rnd() * 0.55; }
+    else if (side === 1) { x = t; z = -0.4 + rnd() * 0.55; }
+    else if (side === 2) { x = -0.4 + rnd() * 0.55; z = t; }
+    else { x = WI + 0.15 + rnd() * 0.55; z = t; }
     world.add(box(mat(rnd() > 0.5 ? C.orange : C.orangeDeep), x - s, x + s, -0.02, 0.04 + s * 0.4, z - s, z + s));
   }
 
@@ -207,32 +233,39 @@ export function buildMechanic(scene) {
   const mat = c => new THREE.MeshLambertMaterial({ color: c });
 
   const walk = new THREE.Group(); group.add(walk);
-  const deck = (y, topC, sideC) => {
-    walk.add(box([mat(sideC), mat(sideC), mat(sideC), mat(sideC), mat(topC), mat(sideC)],
-      -ARM_HALF, ARM_HALF, y - 0.5, y, -0.42, 0.42));
+  const deckTex = tileTexture('#33409a', '#8fa4e8');
+  deckTex.repeat.set(9, 1);
+  const deckTop = new THREE.MeshLambertMaterial({ map: deckTex });
+  const deckSide = mat(C.deckSide);
+  const deck = (y) => {
+    walk.add(box([deckSide, deckSide, deckTop, deckSide, deckSide, deckSide],
+      -ARM_HALF, ARM_HALF, y - 0.5, y, -0.4, 0.4));
+    for (const zz of [-0.34, 0.34]) {
+      walk.add(box(mat(C.deckEdge), -ARM_HALF + 0.1, ARM_HALF - 0.1, y - 0.02, y + 0.04, zz - 0.07, zz + 0.07));
+    }
   };
-  deck(WALK_Y, C.walkTop, C.walkSide);          // 下桥（行走面）
-  deck(WALK_Y + 1.85, C.walkTop, C.walkSide);   // 上桥（同轴同步旋转）
+  deck(WALK_Y);           // 下桥（行走面）
+  deck(WALK_Y + 1.6);     // 上桥（同轴同步旋转）
   for (let i = -4; i <= 4; i++) {
-    for (const y of [WALK_Y, WALK_Y + 1.85]) {
-      walk.add(box(mat(C.walkTopHi), i * 0.78 - 0.19, i * 0.78 + 0.19, y, y + 0.016, -0.2, 0.2));
+    for (const y of [WALK_Y, WALK_Y + 1.6]) {
+      walk.add(box(mat(C.deckDot), i * 0.44 - 0.18, i * 0.44 + 0.18, y, y + 0.02, -0.19, 0.19));
     }
   }
-  for (const ex of [-ARM_HALF + 0.16, ARM_HALF - 0.16]) {
-    for (const y of [WALK_Y, WALK_Y + 1.85]) {
-      walk.add(box(mat(C.columnCap), ex - 0.1, ex + 0.1, y - 0.38, y, -0.34, 0.34));
+  for (const ex of [-ARM_HALF + 0.15, ARM_HALF - 0.15]) {
+    for (const y of [WALK_Y, WALK_Y + 1.6]) {
+      walk.add(box(mat(C.columnCap), ex - 0.1, ex + 0.1, y - 0.36, y, -0.32, 0.32));
     }
   }
 
   // 顶部转子：橙色十字 + 端块（点击目标，指示朝向）
   const rotor = new THREE.Group(); rotor.position.y = ROT_Y; group.add(rotor);
-  rotor.add(box(mat(C.orange), -0.24, 0.24, -0.24, 0.24, -0.2, 0.2));
+  rotor.add(box(mat(C.orange), -0.19, 0.19, -0.19, 0.19, -0.19, 0.19));
   for (const d of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     rotor.add(box(mat(C.orangeDeep),
-      d[0] * 0.5 - 0.14 * Math.abs(d[1]) - 0.14 * Math.abs(d[0]), d[0] * 0.5 + 0.14 * Math.abs(d[1]) + 0.14 * Math.abs(d[0]),
-      -0.13, 0.13,
-      d[1] * 0.5 - 0.14 * Math.abs(d[0]) - 0.14 * Math.abs(d[1]), d[1] * 0.5 + 0.14 * Math.abs(d[0]) + 0.14 * Math.abs(d[1])));
-    rotor.add(box(mat(C.orange), d[0] * 0.9 - 0.15, d[0] * 0.9 + 0.15, -0.15, 0.15, d[1] * 0.9 - 0.15, d[1] * 0.9 + 0.15));
+      d[0] * 0.42 - 0.13 * Math.abs(d[1]) - 0.13 * Math.abs(d[0]), d[0] * 0.42 + 0.13 * Math.abs(d[1]) + 0.13 * Math.abs(d[0]),
+      -0.12, 0.12,
+      d[1] * 0.42 - 0.13 * Math.abs(d[0]) - 0.13 * Math.abs(d[1]), d[1] * 0.42 + 0.13 * Math.abs(d[0]) + 0.13 * Math.abs(d[1])));
+    rotor.add(box(mat(C.orange), d[0] * 0.74 - 0.14, d[0] * 0.74 + 0.14, -0.14, 0.14, d[1] * 0.74 - 0.14, d[1] * 0.74 + 0.14));
   }
 
   return {
@@ -242,49 +275,49 @@ export function buildMechanic(scene) {
   };
 }
 
-/* ---------------- 红衣小孩（跟随者，1.2 单位高） ---------------- */
+/* ---------------- 红衣小孩（跟随者，尖顶红帽） ---------------- */
 export function buildChild() {
   const group = new THREE.Group();
-  const robe = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.145, 0.5, 10),
+  const robe = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.155, 0.52, 10),
     new THREE.MeshLambertMaterial({ color: C.childRed }));
-  robe.position.y = 0.25; group.add(robe);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 10),
+  robe.position.y = 0.26; group.add(robe);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.105, 12, 10),
     new THREE.MeshLambertMaterial({ color: 0x2a2c3c }));
-  head.position.y = 0.6; group.add(head);
-  const hood = new THREE.Mesh(new THREE.ConeGeometry(0.115, 0.3, 10),
+  head.position.y = 0.62; group.add(head);
+  const hood = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.32, 10),
     new THREE.MeshLambertMaterial({ color: C.childRed }));
-  hood.position.y = 0.72; group.add(hood);
+  hood.position.y = 0.76; group.add(hood);
   return { group };
 }
 
 /* ---------------- 行走链 ---------------- */
-// 桥面段（点18→19）端点随机关角度变化，艾达在桥上时随转动被载运。
-// 门洞段（桥尾→门洞→外梯脚）需桥处于 0°（对接门洞）。
+// 桥面段（点23→24）端点随机关角度变化，艾达在桥上时随转动被载运。
+// 门洞段（桥尾→外梯脚，穿墙）需桥处于 0°（对接门洞）。
 function chainPoints() {
   const P = (x, y, z, extra) => Object.assign({ p: new THREE.Vector3(x, y, z) }, extra);
   const e0 = walkEnds(0);
   return [
-    P(10.9, 0, 18.6), P(10.3, 0, 18.2), P(10.6, 0, 17.3), P(10.0, 0, 16.9),
-    P(9.7, 0, 15.6), P(10.0, 0, 14.7), P(9.4, 0, 14.3), P(9.7, 0, 13.4),
-    P(8.9, 0, 13.0), P(9.2, 0, 12.1), P(8.4, 0, 11.7), P(8.7, 0, 10.8),
-    P(7.9, 0, 10.4), P(7.4, 0, 9.1), P(7.7, 0, 8.2), P(6.9, 0, 7.8),
-    P(7.2, 0, 6.9), P(6.5, 0, 6.5),                                   // 之字径 0-17
-    P(6.4, 0, 6.4),                                                   // 18 井沿前角（外沿）
-    P(1.35, 0, 6.85),                                                 // 19 墙外沿左行
-    P(1.05, 0, 6.95), { stairs: true },                               // 20 梯脚（基座梯）
-    P(0.95, WALK_Y, 6.45),                                           // 21 梯顶（隧道口）
-    P(0.95, WALK_Y, 5.9),                                            // 22 隧道内口
-    P(e0[0].x, WALK_Y, e0[0].z),                                      // 23 桥头（拱门端）
-    P(e0[1].x, WALK_Y, e0[1].z),                                      // 24 桥尾（FR 门洞端）
-    P(5.9, WALK_Y, 0.9), { door: true, seam: true },                  // 25 门洞内口（墙内换位）
-    P(6.72, WALK_Y, 6.1), { door: true, stairs: true },               // 26 外梯脚（贴前角上行）
-    P(6.72, TOP_Y - 0.25, 5.95),                                      // 27 外梯顶
-    P(6.15, TOP_Y, 5.9),                                              // 28 登墙顶
-    P(6.15, TOP_Y, 0.4),                                              // 29 FR 顶 → 后角
-    P(0.4, TOP_Y, 0.4),                                               // 30 BR 顶
-    P(0.4, TOP_Y, 5.9),                                               // 31 BL 顶
-    P(0.75, TOP_Y, 6.25),                                             // 32 FL 顶
-    P(-0.95, TOP_Y, 6.95),                                            // 33 端平台（终点）
+    P(13.2, 0, 18.0), P(12.1, 0, 17.7), P(12.5, 0, 16.6), P(11.4, 0, 16.3),
+    P(11.8, 0, 15.2), P(10.7, 0, 14.9), P(11.1, 0, 13.8), P(10.0, 0, 13.5),
+    P(10.4, 0, 12.4), P(9.3, 0, 12.1), P(9.7, 0, 11.0), P(8.6, 0, 10.7),
+    P(9.0, 0, 9.6), P(7.9, 0, 9.3), P(8.3, 0, 8.2), P(7.2, 0, 7.9),
+    P(7.6, 0, 6.8), P(6.5, 0, 6.5),                                   // 之字径 0-17
+    P(6.3, 0, 6.3),                                                   // 18 前角（墙外沿）
+    P(1.3, 0, 6.75),                                                  // 19 墙外沿左行
+    P(1.0, 0, 6.55), { stairs: true },                                // 20 隧道口外（基座梯脚）
+    P(0.9, 0, 4.6),                                                   // 21 隧道内梯脚
+    P(0.88, WALK_Y, 3.95),                                            // 22 梯顶（隧道内口）
+    P(e0[1].x, WALK_Y, e0[1].z),                                      // 23 桥头（拱门端）
+    P(e0[0].x, WALK_Y, e0[0].z),                                      // 24 桥尾（FR 门洞端）
+    P(3.95, WALK_Y, 0.9), { door: true, seam: true },                 // 25 门洞内口（墙内换位）
+    P(4.62, WALK_Y, 4.3), { door: true, stairs: true },               // 26 外梯脚（贴前角上行）
+    P(4.5, TOP_Y, 2.72),                                              // 27 外梯顶（FR 压顶边缘）
+    P(4.2, TOP_Y, 2.5),                                               // 28 登 FR 压顶
+    P(4.2, TOP_Y, 0.3),                                               // 29 FR 顶 → 后角
+    P(0, TOP_Y, 0.3),                                                 // 30 BR 顶
+    P(0, TOP_Y, 4.0),                                                 // 31 BL 顶
+    P(0.9, TOP_Y, 4.15),                                              // 32 FL 压顶
+    P(-0.9, TOP_Y, 4.3),                                              // 33 端平台（终点）
   ].reduce((acc, el) => {
     if (!el.p) { Object.assign(acc[acc.length - 1], el); } else acc.push(el);
     return acc;
@@ -301,7 +334,7 @@ export function createPlay({ engine, chapter, ida, fx, ui, mech, child }) {
     cum.push(cum[i] + segLen[i]);
   }
   const TOTAL = cum[cum.length - 1];
-  const WALK_SEG = 23;        // 桥面段（点23→24：整条桥，端点随角度变化）
+  const WALK_SEG = 23;        // 桥面段（点23→24）
   const AT_ARCH = cum[22] + 0.05, AT_DOOR = cum[25] + 0.05;
 
   const state = {
@@ -311,7 +344,6 @@ export function createPlay({ engine, chapter, ida, fx, ui, mech, child }) {
     walkPhase: 0, facing: new THREE.Vector3(-1, 0, 0),
     demo: null,
   };
-  ida.group.scale.setScalar(IDA_SCALE);   // 本章艾达放大（视频实测 30px）
 
   function ends() {
     const frac = state.anim ? state.anim.k : state.angle;
@@ -338,10 +370,8 @@ export function createPlay({ engine, chapter, ida, fx, ui, mech, child }) {
     return { x: (p.x + 1) / 2 * view.w, y: (1 - p.y) / 2 * view.h };
   }
 
-  const lastPointer = { x: -1e4, y: -1e4 };
   function onDown(p, e) {
     if (state.finished) return;
-    lastPointer.x = p.x; lastPointer.y = p.y;
     const hs = toScreen(HUB);
     if (Math.hypot(p.x - hs.x, p.y - hs.y) < 0.075 * view.h) {
       rotate();
@@ -352,11 +382,8 @@ export function createPlay({ engine, chapter, ida, fx, ui, mech, child }) {
     const hit = pickChain(p.x, p.y);
     if (hit) { state.sTarget = hit.s; fx.ripple(p.x, p.y); ui.hide(); }
   }
-  function onMove(p) { lastPointer.x = p.x; lastPointer.y = p.y; }
-
   const rect = () => glCanvas.getBoundingClientRect();
   glCanvas.addEventListener('pointerdown', e => onDown({ x: e.clientX - rect().left, y: e.clientY - rect().top }, e));
-  glCanvas.addEventListener('pointermove', e => onMove({ x: e.clientX - rect().left, y: e.clientY - rect().top }));
   glCanvas.addEventListener('pointerup', () => {});
 
   function pickChain(px, py) {
@@ -408,7 +435,7 @@ export function createPlay({ engine, chapter, ida, fx, ui, mech, child }) {
     let moving = false;
     if (Math.abs(state.sTarget - state.s) > 1e-4) {
       const info = posAt(state.s);
-      const speed = info.meta.stairs ? 3.2 : 4.6;
+      const speed = info.meta.stairs ? 3.0 : 4.2;
       const dir = Math.sign(state.sTarget - state.s);
       let ns = state.s + dir * speed * dt;
       if ((dir > 0 && ns > state.sTarget) || (dir < 0 && ns < state.sTarget)) ns = state.sTarget;
@@ -427,17 +454,17 @@ export function createPlay({ engine, chapter, ida, fx, ui, mech, child }) {
     ida.group.rotation.y = Math.atan2(state.facing.x, state.facing.z);
     const swing = moving ? Math.sin(state.walkPhase) * 0.55 : Math.sin(state.walkPhase) * 0.55 * 0.2;
     ida.parts.legL.rotation.x = swing; ida.parts.legR.rotation.x = -swing;
-    ida.parts.body.position.y = moving ? Math.abs(Math.sin(state.walkPhase)) * 0.045 : 0;
+    ida.parts.body.position.y = moving ? Math.abs(Math.sin(state.walkPhase)) * 0.035 : 0;
     ida.parts.body.rotation.x = moving ? 0.05 : 0;
     // 红衣小孩跟随（落后固定弧长）
-    const sChild = Math.max(0, state.s - 2.1);
+    const sChild = Math.max(0, state.s - 1.9);
     child.group.position.copy(posAt(sChild).p);
     child.group.rotation.y = ida.group.rotation.y;
-    child.group.position.y += moving ? Math.abs(Math.sin(state.walkPhase - 0.6)) * 0.035 : 0;
+    child.group.position.y += moving ? Math.abs(Math.sin(state.walkPhase - 0.6)) * 0.03 : 0;
     state.moving = moving;
 
     // 镜头随爬升上移
-    const panTarget = Math.max(0, ida.group.position.y - 3.4) * 0.85;
+    const panTarget = Math.max(0, ida.group.position.y - 2.6) * 0.8;
     camState.panU = THREE.MathUtils.damp(camState.panU, panTarget, 2.0, dt);
     engine.placeCamera();
 
@@ -463,9 +490,9 @@ export function createPlay({ engine, chapter, ida, fx, ui, mech, child }) {
     ui.hide();
     state.demo = { t: 0, steps: [
       { at: 0.6, go: AT_ARCH },      // 拱门槛
-      { at: 8.5, go: AT_DOOR },      // FR 门洞
-      { at: 15.0, go: TOTAL },       // 端平台
-      { at: 22.0, rotate: true },    // 转子两连转（视频中 t=20-23 的演示动作）
+      { at: 9.0, go: AT_DOOR },      // FR 门洞
+      { at: 15.5, go: TOTAL },       // 端平台
+      { at: 22.0, rotate: true },    // 转子两连转（视频 t=20-23 演示动作）
       { at: 25.5, rotate: true },
     ] };
     if (play.onDemoChange) play.onDemoChange(true);
