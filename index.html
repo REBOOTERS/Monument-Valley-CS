@@ -2,192 +2,45 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Monument Valley — 旋转之章</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monument Valley — 曲柄之章</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="css/style.css">
-<style>
-  /* 右上「自动演示」圆钮：沿用 .ui-circle 基底，仅镜像到右侧并放三角图标 */
-  #btnAuto { left: auto; right: 22px; }
-  .ui-play {
-    width: 0; height: 0;
-    border-style: solid;
-    border-width: 7px 0 7px 12px;
-    border-color: transparent transparent transparent #fff;
-    margin-left: 3px;
-  }
-  #btnAuto.running {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-</style>
 </head>
 <body>
   <div id="app">
-    <canvas id="game"></canvas>
+    <!-- 三层：bg 背景天空/星点/极光 → gl WebGL 场景 → fx 点击波纹/灰尘 -->
+    <canvas id="bg"></canvas>
+    <canvas id="gl"></canvas>
+    <canvas id="fx"></canvas>
 
-    <!-- 左上圆形菜单按钮（装饰，呼应视频） -->
-    <div class="ui-circle" id="btnReset" title="重置关卡">
+    <!-- 左上圆形菜单按钮（呼应视频） -->
+    <div class="ui-circle" id="btnReset" role="button" tabindex="0" aria-label="重置关卡" title="重置关卡">
       <div class="ui-dot"></div>
     </div>
 
-    <!-- 右上自动演示按钮：自动旋曲柄到停靠位 → Ida 自动行至祭坛终点通关 -->
-    <div class="ui-circle" id="btnAuto" title="自动演示">
+    <!-- 右上自动演示按钮：复现视频中的操作序列（转曲柄 → 艾达通关） -->
+    <div class="ui-circle" id="btnAuto" role="button" tabindex="0" aria-label="自动演示" title="自动演示">
       <div class="ui-play"></div>
     </div>
 
-    <div class="hint" id="hint">拖动右侧曲柄旋转机关 · 点击路面让小人行走</div>
-
-    <!-- 通关：两块暗紫色幕布自天顶向两侧拉开，倒泪形缝隙中露出墨绿夜空与极光 -->
-    <div id="finale">
-      <div class="fin-dim"></div>
-      <svg class="fin-svg" viewBox="0 0 576 1280" preserveAspectRatio="xMidYMid slice">
-        <defs>
-          <!-- 缝隙内的墨绿夜空 -->
-          <linearGradient id="finNight" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#0c191d"/>
-            <stop offset="0.32" stop-color="#14302b"/>
-            <stop offset="0.62" stop-color="#0f1f24"/>
-            <stop offset="1" stop-color="#080d12"/>
-          </linearGradient>
-          <radialGradient id="finAurora" cx="0.5" cy="0.5" r="0.5">
-            <stop offset="0" stop-color="#4ec894" stop-opacity="0.62"/>
-            <stop offset="0.55" stop-color="#2f9c72" stop-opacity="0.16"/>
-            <stop offset="1" stop-color="#2f9c72" stop-opacity="0"/>
-          </radialGradient>
-          <radialGradient id="finTipGlow" cx="0.5" cy="0.5" r="0.5">
-            <stop offset="0" stop-color="#a6f9d2" stop-opacity="0.8"/>
-            <stop offset="0.4" stop-color="#43c98f" stop-opacity="0.18"/>
-            <stop offset="1" stop-color="#43c98f" stop-opacity="0"/>
-          </radialGradient>
-          <!-- 幕布：顶端不透明，尖端以下的“尾巴”软化消散 -->
-          <linearGradient id="finCurtainG" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="430">
-            <stop offset="0" stop-color="#241c33" stop-opacity="1"/>
-            <stop offset="0.72" stop-color="#2c2442" stop-opacity="1"/>
-            <stop offset="1" stop-color="#2c2442" stop-opacity="0"/>
-          </linearGradient>
-          <!-- 绿色光边：越靠近尖端越亮 -->
-          <linearGradient id="finRimG" gradientUnits="userSpaceOnUse" x1="0" y1="-24" x2="0" y2="335">
-            <stop offset="0" stop-color="#66e6ac" stop-opacity="0.12"/>
-            <stop offset="0.55" stop-color="#66e6ac" stop-opacity="0.2"/>
-            <stop offset="0.86" stop-color="#7df3bd" stop-opacity="0.6"/>
-            <stop offset="1" stop-color="#bdffe0" stop-opacity="0.95"/>
-          </linearGradient>
-          <filter id="finSoft" x="-60%" y="-60%" width="220%" height="220%">
-            <feGaussianBlur stdDeviation="9"/>
-          </filter>
-          <filter id="finSoft2" x="-60%" y="-60%" width="220%" height="220%">
-            <feGaussianBlur stdDeviation="3.5"/>
-          </filter>
-          <filter id="finGlow" x="-60%" y="-60%" width="220%" height="220%">
-            <feGaussianBlur stdDeviation="7"/>
-          </filter>
-          <clipPath id="finOpenClip">
-            <path id="finOpenP" d=""/>
-          </clipPath>
-        </defs>
-
-        <!-- 泪形缝隙：露出的夜空 -->
-        <path id="finReveal" fill="url(#finNight)"/>
-        <g clip-path="url(#finOpenClip)">
-          <ellipse cx="288" cy="100" rx="330" ry="52" fill="url(#finAurora)" filter="url(#finGlow)"/>
-          <ellipse cx="288" cy="160" rx="250" ry="24" fill="url(#finAurora)" opacity="0.35" filter="url(#finGlow)"/>
-          <ellipse id="finTipEl" cx="288" cy="110" rx="58" ry="82" fill="url(#finTipGlow)"/>
-          <circle cx="232" cy="196" r="1.6" fill="#cdeee0" opacity="0.8"/>
-          <circle cx="338" cy="150" r="1.3" fill="#cdeee0" opacity="0.7"/>
-          <circle cx="306" cy="246" r="1.8" fill="#dff7ec" opacity="0.85"/>
-          <circle cx="256" cy="120" r="1.1" fill="#cdeee0" opacity="0.6"/>
-          <circle cx="362" cy="210" r="1.2" fill="#cdeee0" opacity="0.55"/>
-        </g>
-
-        <!-- 幕布：两块，沿泪形边缘在屏幕侧边裁出 -->
-        <path id="finPanelL" fill="url(#finCurtainG)"/>
-        <path id="finPanelR" fill="url(#finCurtainG)"/>
-
-        <!-- 缝隙边缘：紫色绒边 + 内侧绿色光边 -->
-        <path id="finRimPurple" fill="none" stroke="#7a55a3" stroke-width="17" opacity="0.22" filter="url(#finSoft)"/>
-        <path id="finRimGreen" fill="none" stroke="url(#finRimG)" stroke-width="5" filter="url(#finSoft2)"/>
-      </svg>
-      <div class="fin-streak"></div>
-    </div>
+    <div class="hint" id="hint">拖动右侧的转轮 · 点击你想让艾达前往的位置</div>
+    <div class="chapter" id="chapter">第 一 章<small>迷 途 的 公 主</small></div>
   </div>
 
-  <script src="vendor/three.min.js"></script>
-  <script src="js/game.js"></script>
   <script>
-  /* 自动演示：仅通过 window.MV 调试接口驱动，不改动游戏逻辑。
-     ① 缓动旋转转子 0→THETA_DOCK（与手动拖拽同向，~91.7°）
-     ② dock() 落位后 plan('e5', 1) 经 BFS 排出全程路线，
-        游戏主循环自动行走，Ida 到达祭坛（e5 末端）自动通关。 */
-  (function () {
-    'use strict';
-    var btn = document.getElementById('btnAuto');
-    if (!window.MV || !btn) return;
-
-    var RUN_MS = 90000;          // 行走阶段看门狗
-    var running = false, cancelled = false, raf = 0, timer = 0;
-
-    function easeInOut(k) {
-      return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
-    }
-    function finish() {
-      running = false;
-      btn.classList.remove('running');
-    }
-
-    function startDemo() {
-      var MV = window.MV;
-      if (running || MV.state().won) return;
-      running = true; cancelled = false;
-      btn.classList.add('running');
-      document.getElementById('hint').classList.add('hidden');
-
-      // 读取当前转子角（a0=+x → Q0 为单位四元数，rotor 姿态即绕世界 z 的 θ）
-      var q = MV.rotor.quaternion;
-      var th0 = 2 * Math.atan2(q.z, q.w);
-      var th1 = MV.THETA_DOCK;
-      var DUR = 1800, t0 = performance.now();
-      cancelAnimationFrame(raf);
-      (function frame(now) {
-        if (cancelled) return;
-        var k = Math.min((now - t0) / DUR, 1);
-        MV.setTheta(th0 + (th1 - th0) * easeInOut(k));
-        if (k < 1) raf = requestAnimationFrame(frame);
-        else onRotorDone();
-      })(t0);
-    }
-
-    function onRotorDone() {
-      var MV = window.MV;
-      if (cancelled) return;
-      MV.dock();                  // 保证停靠标志就位、gated 边开放
-      timer = setTimeout(function () {
-        if (cancelled) return;
-        MV.dock();
-        if (!MV.plan('e5', 1)) { finish(); return; }   // 路线规划失败则复位按钮
-        var tEnd = Date.now() + RUN_MS;
-        timer = setInterval(function () {
-          if (cancelled) { clearInterval(timer); return; }
-          if (MV.state().won || Date.now() > tEnd) {
-            clearInterval(timer);
-            finish();
-          }
-        }, 300);
-      }, 150);                   // 等主循环 updateMech 消化停靠状态
-    }
-
-    btn.addEventListener('click', startDemo);
-
-    // 旋转阶段用户手动点按画布接管 → 放弃自动演示（已在行走中则仅停止轮询，
-    // 游戏自身的点按改道照常生效）
-    document.getElementById('game').addEventListener('pointerdown', function () {
-      if (!running) return;
-      cancelled = true;
-      cancelAnimationFrame(raf);
-      clearTimeout(timer);
-      clearInterval(timer);
-      finish();
-    }, true);
-  })();
+  /* 模块脚本（importmap + ESM）加载失败兜底：3s 内未见启动标志则在提示位报错 */
+  window.addEventListener('load', function () {
+    setTimeout(function () {
+      if (window.__MV_BOOTED) return;
+      var h = document.getElementById('hint');
+      if (h) { h.textContent = '资源加载失败，请检查网络后刷新重试'; h.style.opacity = 1; }
+    }, 3000);
+  });
   </script>
+  <script type="importmap">
+  { "imports": { "three": "./vendor/three/three.module.js" } }
+  </script>
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>

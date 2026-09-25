@@ -9,10 +9,19 @@ function chromeExecutablePath() {
   if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
     return process.env.CHROME_PATH;
   }
-  const cache = path.join(os.homedir(), 'Library', 'Caches', 'ms-playwright');
+  // playwright 浏览器缓存：macOS / Windows / Linux 三平台目录
+  const caches = [
+    path.join(os.homedir(), 'Library', 'Caches', 'ms-playwright'),
+    path.join(process.env.LOCALAPPDATA || os.homedir(), 'ms-playwright'),
+    path.join(os.homedir(), '.cache', 'ms-playwright'),
+  ];
   const candidates = [];
-  try {
-    for (const dir of fs.readdirSync(cache)) {
+  for (const cache of caches) {
+    let dirs = [];
+    try {
+      dirs = fs.readdirSync(cache);
+    } catch (e) { continue; /* 无缓存目录 */ }
+    for (const dir of dirs) {
       if (!/^chromium/.test(dir)) continue;
       const base = path.join(cache, dir);
       for (const sub of fs.readdirSync(base)) {
@@ -27,7 +36,7 @@ function chromeExecutablePath() {
         }
       }
     }
-  } catch (e) { /* 无缓存目录 */ }
+  }
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
