@@ -27,7 +27,12 @@ export function createEngine() {
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
   // 结尾镜头平移量（沿相机 up / right，由章节的结局演出驱动）
-  const camState = { target: new THREE.Vector3(), panU: 0, panR: 0 };
+  // halfH：竖直半视高，可被章节覆盖（cameraHalfH）实现每章的取景缩放
+  // dir：相机偏移方向，可被章节覆盖（cameraDir）实现每章的投影仰角
+  const camState = {
+    target: new THREE.Vector3(), panU: 0, panR: 0, halfH: CAM_HALF_H,
+    dir: ISO_DIR.clone(),
+  };
 
   // 视口：画布 CSS 尺寸 / dpr / #app 在视口中的偏移（指针坐标换算用）
   const view = { w: 576, h: 1280, dpr: 1, left: 0, top: 0 };
@@ -35,10 +40,16 @@ export function createEngine() {
 
   function placeCamera() {
     const right = new THREE.Vector3(1, 0, -1).normalize();
-    const up = new THREE.Vector3(-1, 2, -1).normalize();
-    const t = camState.target.clone().addScaledVector(up, camState.panU).addScaledVector(right, camState.panR);
-    camera.position.copy(t).addScaledVector(ISO_DIR, 60);
-    camera.lookAt(t);
+    const t = camState.target.clone().addScaledVector(camState.dir, 60)
+      .addScaledVector(right, camState.panR);
+    // panU 沿"屏幕上方向"平移：视方向与世界上方向的正交分解
+    const upScr = new THREE.Vector3(0, 1, 0).sub(
+      camState.dir.clone().multiplyScalar(camState.dir.y)).normalize();
+    t.addScaledVector(upScr, camState.panU);
+    camera.position.copy(t);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(camState.target.clone()
+      .addScaledVector(right, camState.panR).addScaledVector(upScr, camState.panU));
     camera.updateMatrixWorld();
   }
 
@@ -49,8 +60,9 @@ export function createEngine() {
     renderer.setPixelRatio(view.dpr);
     renderer.setSize(view.w, view.h, false);   // 不写内联 style，布局始终由 CSS 接管
     const aspect = view.w / view.h;
-    camera.top = CAM_HALF_H; camera.bottom = -CAM_HALF_H;
-    camera.left = -CAM_HALF_H * aspect; camera.right = CAM_HALF_H * aspect;
+    const halfH = camState.halfH || CAM_HALF_H;
+    camera.top = halfH; camera.bottom = -halfH;
+    camera.left = -halfH * aspect; camera.right = halfH * aspect;
     camera.updateProjectionMatrix();
     const r = glCanvas.getBoundingClientRect();
     view.left = r.left; view.top = r.top;

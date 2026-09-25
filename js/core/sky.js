@@ -8,7 +8,8 @@ import { REF_H, PX_PER_UP_UNIT } from './engine.js';
 
 export function createSky(canvas, opts = {}) {
   const ctx = canvas.getContext('2d');
-  const stars = Array.from({ length: 140 }, () => ({
+  const day = opts.mode === 'day';     // 白昼模式（第二章）：素净浅底，无星/月/极光
+  const stars = day ? [] : Array.from({ length: 140 }, () => ({
     x: Math.random(), y: Math.random(),
     r: 0.6 + Math.random() * 1.4, a: 0.25 + Math.random() * 0.6,
     v: 0.004 + Math.random() * 0.01,
@@ -26,6 +27,12 @@ export function createSky(canvas, opts = {}) {
     const w = canvas.width, h = canvas.height;
     const g = ctx;
     g.clearRect(0, 0, w, h);
+    if (day) {
+      // 白昼：素净浅底（视频取样 ≈ rgb(251,249,247)）
+      g.fillStyle = '#fbf9f7';
+      g.fillRect(0, 0, w, h);
+      return;
+    }
     const S = h / REF_H;                                   // 画布像素 / 参考取景像素
     const panPx = env.panU * PX_PER_UP_UNIT * S;           // 镜头上移量（画布像素）
     const dark = env.dark || 0;

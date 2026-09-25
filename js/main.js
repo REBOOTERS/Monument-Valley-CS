@@ -17,18 +17,25 @@ import { createSky } from './core/sky.js';
 import { createFx } from './core/fx.js';
 import { createUi } from './core/ui.js';
 import chapter1 from './chapters/chapter1.js';
+import chapter2 from './chapters/chapter2.js';
 import { createGame } from './game.js';
 
-const CHAPTERS = [chapter1];   // 章节注册表
-const chapter = CHAPTERS[0];   // 当前章节
+const CHAPTERS = [chapter1, chapter2];   // 章节注册表
+const chapter = CHAPTERS[(() => {
+  const c = new URLSearchParams(location.hash.slice(1)).get('ch');
+  const i = parseInt(c || '1', 10) - 1;
+  return i >= 0 && i < CHAPTERS.length ? i : 0;
+})()];                                   // 当前章节（#ch=N 选择，默认第一章）
 
 // ------------------------------------------------------------ 引擎与画布层
 const engine = createEngine();
 const bgCanvas = document.getElementById('bg');
 const fxCanvas = document.getElementById('fx');
-const sky = createSky(bgCanvas, { moon: chapter.skyMoon });
+const sky = createSky(bgCanvas, { mode: chapter.skyMode, moon: chapter.skyMoon });
 const fx = createFx(fxCanvas);
 const ui = createUi();
+ui.setChapterText(chapter.META.title, chapter.META.subtitle);
+if (chapter.META.hint) ui.setText(chapter.META.hint);
 
 // 提示 12s 自动隐藏（真实时间）；上下文丢失/恢复的可见兜底
 engine.onUpdate((dt, dtRaw) => ui.tick(dtRaw));
@@ -36,16 +43,24 @@ engine.onContextLost(() => { ui.setText('图形上下文丢失，请刷新页面
 engine.onContextRestored(() => ui.afterContextRestore());
 
 // ------------------------------------------------------------ 章节内容
+if (chapter.cameraHalfH) engine.camState.halfH = chapter.cameraHalfH;   // 章节级取景缩放
+if (chapter.cameraDir) engine.camState.dir = chapter.cameraDir;         // 章节级相机方向
 chapter.buildWorld(engine.scene);
-const rotor = chapter.buildRotor(engine.scene);
+const mech = chapter.buildMechanic
+  ? chapter.buildMechanic(engine.scene)
+  : chapter.buildRotor(engine.scene);
 engine.camState.target.copy(chapter.cameraTarget);
 engine.placeCamera();
 
 const ida = buildIda(); engine.scene.add(ida.group);
-const chain = buildChain(chapter.CHAIN);
+const child = chapter.buildChild ? chapter.buildChild() : null;
+if (child) engine.scene.add(child.group);
+const chain = chapter.CHAIN ? buildChain(chapter.CHAIN) : null;
 
 // ------------------------------------------------------------ 玩法状态机
-const game = createGame({ engine, chapter, chain, ida, rotor, fx, ui });
+const game = chapter.createPlay
+  ? chapter.createPlay({ engine, chapter, ida, fx, ui, mech, child })
+  : createGame({ engine, chapter, chain, ida, rotor: mech, fx, ui });
 game.onDemoChange = running =>
   document.getElementById('btnAuto').classList.toggle('running', running);
 
@@ -78,13 +93,17 @@ ui.bindButton(document.getElementById('btnAuto'), () => game.startDemo());
 // ------------------------------------------------------------ 调试 / 测试接口（window.MV）
 window.MV = {
   THREE, scene: engine.scene, camera: engine.camera, renderer: engine.renderer,
-  ida: ida.group, rotor: rotor.group, crank: rotor.crank, camState: engine.camState,
-  TOTAL: chain.TOTAL, GOAL: chapter.GOAL, ROTOR_RANGE: chain.rotorRange,
+  ida: ida.group, rotor: mech.group, crank: mech.crank || mech.group, camState: engine.camState,
+  mech,
+  TOTAL: game.TOTAL(), GOAL: chapter.GOAL || null,
+  ROTOR_RANGE: chain ? chain.rotorRange : null,
   getTheta: game.getTheta,
   setTheta: game.setTheta,
   dock: game.dock,
   init: game.init,
   go: game.go,
+  setS: game.setS,
+  setTarget: game.setTarget,
   reset: game.reset,
   hubScreen: game.hubScreen,
   appOffset: () => ({ left: engine.view.left, top: engine.view.top }),

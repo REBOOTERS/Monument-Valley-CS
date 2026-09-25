@@ -5,7 +5,7 @@
 export function createUi() {
   const hintEl = document.getElementById('hint');
   const chapterEl = document.getElementById('chapter');
-  const HINT_TEXT = hintEl ? hintEl.textContent : '';
+  let HINT_TEXT = hintEl ? hintEl.textContent : '';
   let hintHidden = false, levelT = 0;
 
   function hide() {
@@ -18,7 +18,10 @@ export function createUi() {
     hintHidden = false;
     hintEl.style.opacity = 1;
   }
-  function setText(t) { if (hintEl) hintEl.textContent = t; }
+  function setText(t) {
+    if (hintEl) hintEl.textContent = t;
+    HINT_TEXT = t;   // 章节提示文案随之更新（reset 恢复到该文案）
+  }
 
   function tick(dtRaw) {
     levelT += dtRaw;
@@ -37,6 +40,12 @@ export function createUi() {
 
   function showChapter() { if (chapterEl) chapterEl.style.opacity = 1; }
   function hideChapter() { if (chapterEl) chapterEl.style.opacity = 0; }
+  function setChapterText(title, subtitle) {
+    if (!chapterEl) return;
+    chapterEl.firstChild.nodeValue = title;
+    const sm = chapterEl.querySelector('small');
+    if (sm) sm.textContent = subtitle;
+  }
 
   // 圆形按钮：click + Enter/Space 键触发（a11y）
   function bindButton(el, fn) {
@@ -46,5 +55,5 @@ export function createUi() {
     });
   }
 
-  return { hide, show, setText, tick, reset, afterContextRestore, showChapter, hideChapter, bindButton };
+  return { hide, show, setText, tick, reset, afterContextRestore, showChapter, hideChapter, setChapterText, bindButton };
 }
